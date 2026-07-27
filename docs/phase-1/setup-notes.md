@@ -2,28 +2,36 @@
 
 ## 基本信息
 
-- 日期：2026-07-15
+- 日期：2026-07-15 至 2026-07-16
 - 操作系统：Windows
 - Python 版本：3.11.15（Conda 环境 `email-ai-agent-ref`）
 - 参考项目分支：main
 - 参考项目 Commit ID：f54ad9d37e2dbe5a6510095acbcf8b6fbf6a79ba
-- 模型供应商及模型：
-- 测试邮箱服务商：
+- 模型供应商及模型：DeepSeek；代码配置为 `deepseek-chat`，实际响应元数据曾返回 `deepseek-v4-flash`
+- 测试邮箱服务商：163 测试邮箱（IMAP SSL 993、SMTP SSL 465）
 
 ## 安装步骤
 
-待记录实际执行的命令和结果。
+原始安装终端记录未单独保存。根据当前仍可运行的 Conda 环境与参考仓库，环境可通过以下方式复现：
+
+```powershell
+conda create -n email-ai-agent-ref python=3.11
+conda activate email-ai-agent-ref
+python -m pip install -r references/Email-AI-Agent/requirements.txt
+```
+
+参考项目的 `requirements.txt` 没有锁定版本，因此以下“最终依赖版本”是 2026-07-27 从现存实验环境读取的实际版本，不代表参考项目声明的兼容范围。正式系统必须使用独立依赖文件并锁定经测试的版本。
 
 ## 最终依赖版本
 
-待运行成功后记录，尤其关注：
-
-- langchain
-- langgraph
-- langsmith
-- openai
-- python-dotenv
-- jinja2
+| 依赖 | 实验环境实际版本 |
+|---|---:|
+| `langchain` | 1.3.13 |
+| `langgraph` | 1.2.9 |
+| `langsmith` | 0.10.5 |
+| `openai` | 2.45.0 |
+| `python-dotenv` | 1.2.2 |
+| `jinja2` | 3.1.6 |
 
 ## 对参考项目的本地修改
 
@@ -41,6 +49,8 @@
 | `agents/filtering_agent.py` | 修复模型解释文本导致的分类误判 | 改为 JSON 固定标签和精确解析，失败时进入 `needs_review` | 是，正式系统应采用更强的结构化输出 |
 | `agents/summarization_agent.py` | 输出适配中文求职场景 | 摘要提示词改为简体中文并要求保留关键时间信息 | 是 |
 | `agents/response_agent.py`、`utils/formatter.py` | 输出中文回复 | 回复正文、称呼、主题和落款改为中文 | 是 |
+| `agents/human_review_agent.py` | 中文化实验交互 | 将草稿审核提示改为中文 | 否，正式系统改用持久化 Web 审核 |
+| `core/supervisor.py` | 修复历史记录默认值拼写 | `unkonwn` 改为 `unknown` | 否，仅小型缺陷修复 |
 
 ## 遇到的问题
 

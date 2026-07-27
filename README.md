@@ -2,9 +2,11 @@
 
 毕业设计：**基于大语言模型与多智能体协作的求职邮件智能管理系统设计与实现**。
 
-第一阶段的参考项目运行与分析已经完成，当前进入正式系统架构评审和技术验证准备阶段。项目背景和长期协作约定见 [AGENTS.md](AGENTS.md)。
+第一阶段的参考项目运行与分析已经完成，MVP、架构和数据库逻辑 ER 已收敛。
+FastAPI、SQLAlchemy 和 Alembic 后端骨架已经建立，下一步是实现第一批 ORM 模型和
+Alembic 迁移。项目背景和长期协作约定见 [AGENTS.md](AGENTS.md)。
 
-正式系统的当前架构评审稿见 [多智能体求职邮件系统设计稿](docs/design/multi-agent-system-design.md)。该设计基于第一阶段结论提出，尚未冻结。
+全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 
 ## 当前目录
 
@@ -15,12 +17,26 @@ job-mail-agent/
 ├── .env.example                    # 环境变量示例，不包含真实凭据
 ├── references/                     # 第三方参考项目，不纳入本项目版本历史
 ├── experiments/email-ai-agent/     # 针对参考项目的独立实验与测试数据
-├── docs/phase-1/                   # 第一阶段过程记录和验收材料
-├── src/                            # 自主实现代码，第一阶段结束后再确定结构
+├── docs/                           # 按需求、架构、数据库、计划和阶段记录分类
+├── backend/                        # 正式 FastAPI/SQLAlchemy/Alembic 后端
+├── frontend/                       # 正式 Vue 3 前端（后续创建）
 └── tests/fixtures/emails/          # 脱敏邮件测试样例
 ```
 
-## 第一阶段开始方式
+## 后端开始方式
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+uvicorn app.main:app --reload
+```
+
+详细命令见 [后端说明](backend/README.md)。
+
+## 第一阶段参考项目
 
 在项目根目录执行：
 
@@ -28,6 +44,7 @@ job-mail-agent/
 git clone https://github.com/parthshr370/Email-AI-Agent.git references/Email-AI-Agent
 ```
 
-克隆完成后，先在 [参考项目登记表](references/README.md) 中记录 Commit ID 和许可证，再按 [第一阶段清单](docs/phase-1/README.md) 推进。
+第一阶段已经完成。需要复现时，先查看 [参考项目登记表](references/README.md) 和
+[第一阶段清单](docs/phase-1/README.md)。
 
 不要把 API Key、邮箱密码、授权码或包含个人信息的真实邮件提交到仓库。

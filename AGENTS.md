@@ -24,25 +24,27 @@
 
 ### 当前阶段
 
-项目第一阶段“运行和分析 Email-AI-Agent 参考项目”已经完成：DeepSeek、模拟邮件、LangGraph 分类/摘要/回复、163 IMAP、SMTP、跨邮箱闭环和源码分析均已验证。当前进入正式系统架构评审与技术验证准备阶段，尚未冻结最终架构，也尚未开始完整业务开发。
+项目第一阶段“运行和分析 Email-AI-Agent 参考项目”已经完成：DeepSeek、模拟邮件、LangGraph 分类/摘要/回复、163 IMAP、SMTP、跨邮箱闭环和源码分析均已验证。第二阶段的 MVP 业务范围、项目骨架决策和数据库逻辑 ER 已于 2026-07-27 收敛，FastAPI、SQLAlchemy 和 Alembic 后端骨架已经建立。下一步是实现第一批 ORM 模型和 Alembic 迁移，尚未开始完整业务开发。
 
 - 第三方参考仓库统一放在 `references/`，不纳入本项目版本历史。
 - 针对参考项目的非侵入式实验放在 `experiments/email-ai-agent/`。
 - 运行过程、测试结果、工作流分析和复用结论放在 `docs/phase-1/`。
-- 正式系统源码暂时只预留 `src/`，完成第一阶段复用评估后再决定最终目录和架构。
+- 正式系统采用仓库根目录下的 `backend/` 与 `frontend/` 单仓结构；早期预留的根目录 `src/` 已移除。
 - 不要把毕业设计功能直接堆叠进 `references/Email-AI-Agent`。
-- 第一阶段结论位于 `docs/phase-1/`，正式系统当前设计稿位于 `docs/design/multi-agent-system-design.md`。
+- 文档统一从 `docs/README.md` 进入；第一阶段结论位于 `docs/phase-1/`，正式文档按 `requirements/`、`architecture/`、`database/` 和 `plans/` 分类。
 
-## 3. 初步技术选型与待定架构
+## 3. 当前技术选型与架构边界
 
-- 前端初步计划：Vue 3，用于邮箱页面、邮件详情、求职看板、申请详情、任务日历、统计图表和审核界面。
-- 后端初步计划：FastAPI，承载 REST API、认证、邮箱账户管理、业务逻辑和智能体工作流入口。
-- 数据库初步计划：MySQL，保存邮件元数据、求职申请、结构化抽取结果、任务、日程、草稿和处理记录。
-- 智能体框架初步计划：LangChain + LangGraph，用有状态工作流组织多个智能体，并实现 Human-in-the-Loop。
-- 邮件协议初步计划：IMAP 负责收取和同步，SMTP 负责发送；不计划在新实现中使用 POP3 代替 IMAP。
-- 大语言模型初步计划：接入 DeepSeek 和 Qwen。通过统一、可替换的模型适配层调用，避免把供应商、具体模型名或密钥硬编码到业务逻辑中。
+- 前端：Vue 3 + TypeScript，用于邮箱页面、邮件详情、求职看板、申请详情、任务日历和审核界面；MVP 使用 REST + 状态轮询。
+- 后端：FastAPI，承载 REST API、单用户运行上下文、邮箱账户管理、业务用例和智能体工作流入口。
+- 业务数据库：MySQL 8 + SQLAlchemy 2 + PyMySQL，Alembic 管理迁移。
+- 工作流持久化：MVP 使用官方 SQLite checkpointer 保存 LangGraph checkpoint；MySQL 仍是审核和业务状态唯一真相源。
+- 智能体框架：LangChain + LangGraph，使用确定性 Orchestrator 协调四个核心 Agent，并实现 Human-in-the-Loop。
+- 长期记忆：MVP 不启用 LangGraph Store；用户、公司、岗位和模板等确定数据不与 MySQL 双写。
+- 邮件协议：IMAP 负责收取和同步，SMTP 负责发送；不使用 POP3 代替 IMAP。
+- 大语言模型：DeepSeek 作为首实现，Qwen 通过统一、可替换的模型适配层保留接入能力。
 
-以下四层结构是当前的初步架构草案，并非最终定案：
+当前总体结构如下；详细边界以 `docs/architecture/architecture-decisions.md` 为准：
 
 ```text
 Vue 3 前端
@@ -63,34 +65,32 @@ FastAPI 后端
 └── Agent 调用接口
         ↓
 LangGraph 多 Agent 工作流
-├── 邮件预处理 Agent
-├── 求职邮件分类 Agent
-├── 信息抽取 Agent
-├── 求职记录匹配 Agent
-├── 状态更新 Agent
-└── 回复生成 Agent
+├── 确定性 Orchestrator
+├── Classification Agent
+├── Extraction Agent
+├── Application Agent
+├── Reply Agent
+└── Validation Node（确定性）
         ↓
-MySQL + IMAP/SMTP + DeepSeek/Qwen
+MySQL + SQLite Checkpoint + IMAP/SMTP + DeepSeek/Qwen
 ```
 
-若后续采用该四层结构，应保持清晰边界：Vue 3 通过 FastAPI 使用业务能力；FastAPI 负责确定性业务规则、持久化和外部集成编排；LangGraph 负责需要模型推理的有状态协作流程；MySQL、邮件协议和模型服务通过基础设施适配层接入。无论最终架构如何调整，前端不宜直接调用数据库、IMAP 或 SMTP，Agent 节点也不应绕过安全校验随意执行发送或修改关键状态。
+必须保持清晰边界：Vue 3 通过 FastAPI 使用业务能力；FastAPI 负责确定性业务规则、持久化和外部集成编排；LangGraph 负责需要模型推理的有状态协作流程；MySQL、checkpoint、邮件协议和模型服务通过基础设施适配层接入。前端不直接调用数据库、IMAP 或 SMTP，Agent 节点不得绕过安全校验执行发送或修改关键状态。
 
-项目架构目前待定，后续需要在实际阅读、运行和理解 Email-AI-Agent、EasyMail、Job-Application-Manager 等参考项目后，根据可复用设计、许可证、实现复杂度、毕业设计工作量和演示需求进行调整。不要因为本节记录了初步方案，就把具体分层、模块数量、Agent 数量或技术选型视为不可更改的硬性约束。
+项目骨架已经收敛，但实现过程中仍可根据证据调整。涉及数据库类型、目录根结构、Agent 职责、checkpoint、人工审核或外部动作边界的重大调整，必须说明收益、代价和论文影响，并同步更新 `docs/architecture/architecture-decisions.md`、ER、实施计划和本文件。
 
-在仓库尚未形成明确目录规范前，不要假定现有模块已经存在。提出或实施重大架构调整时，应说明参考依据、收益、代价和对论文内容的影响，再同步更新本文件。即使架构调整，也应尽量保持前端、接口、领域业务、智能体、基础设施和数据访问职责清晰。
+正式后端骨架位于 `backend/`。新增代码时遵循 `backend/app/api`、`application`、`domain`、`agents`、`workflows`、`infrastructure`、`prompts` 和 `core` 的职责划分，不得因为目录存在就虚构尚未实现的业务能力。
 
 ## 4. 多智能体职责
 
-当前草案包含以下六个 Agent，具体数量、职责边界和执行顺序待研究参考项目后确定：
+MVP 使用确定性 Orchestrator 协调以下四个核心 Agent：
 
-- 邮件预处理：解析主题、发件人、正文、HTML、附件和引用内容，清洗无关文本。
-- 邮件分类：判断是否为求职邮件，并输出业务类别、优先级和置信度。
-- 信息抽取：输出公司、岗位、阶段、时间、地点、链接、联系人、材料、截止日期等结构化字段。
-- 求职记录匹配：将邮件与已有申请匹配；无法匹配时提出新建申请建议；存在多个候选项时进入人工确认。
-- 状态更新：根据经过验证的抽取结果提出求职阶段变更，并维护申请时间线。关键状态更新需要业务规则校验，必要时进入人工确认。
-- 回复生成：结合邮件内容和求职上下文生成可编辑草稿。
+- Classification Agent：判断是否为求职邮件，并输出类别、优先级、是否回复和置信度。
+- Extraction Agent：输出公司、岗位、阶段、时间、地点、链接、联系人、材料、截止日期及字段证据。
+- Application Agent：读取候选申请和时间线，提出匹配、新建申请、阶段和任务建议，不直接写数据库。
+- Reply Agent：结合邮件和申请上下文判断是否回复，并生成可编辑的回复正文。
 
-在当前草案中，日程与任务转换、人工审核和最终动作执行属于 FastAPI 业务服务与 LangGraph 工作流控制职责，不强制单独包装成 Agent。后续可根据参考项目实现和实际业务复杂度合并、拆分或新增 Agent，但应有明确理由，避免为了数量而过度拆分。
+邮件 MIME/HTML 预处理、Schema 校验、数据库 CRUD、状态机、日程与任务转换、归档规则、人工审核状态和最终动作执行属于确定性 Node、Service/Executor 或工作流控制职责，不包装成 Agent。MVP 不实现 Review Agent 和 LLM Supervisor。
 
 一个典型处理流程可表示为：
 
@@ -171,7 +171,7 @@ LangGraph 状态应传递结构化、可验证的数据。节点输出优先采�
 - 优先完成可演示的端到端闭环，再逐步扩展功能：邮件同步 -> 分类/抽取 -> 申请看板 -> 草稿审核。
 - 业务规则与模型推理分离。可确定的解析、去重、状态校验、权限检查应由代码完成，不要全部交给大模型。
 - 所有智能体输出都应可追踪：保存输入邮件标识、模型输出、置信度、人工修改、最终动作及时间。
-- 邮件同步必须考虑 UID、Message-ID、文件夹和账户维度的幂等与去重，避免重复创建申请、任务或回复。
+- 邮件同步必须考虑 UID、Message-ID、首次同步文件夹和账户维度的幂等与去重；归档等移动操作只更新当前文件夹，避免破坏原始幂等键或重复创建申请、任务和回复。
 - 日期时间必须保留原始文本并转换为带时区的标准值；模糊日期、缺失年份和时区不明时必须标记待确认。
 - 邮件与求职申请的匹配应允许一封邮件关联一个申请，也应处理无法匹配、候选项冲突和同公司多岗位场景。
 - 回复功能默认只生成草稿。除非用户明确配置并确认，否则不得自动发送。
