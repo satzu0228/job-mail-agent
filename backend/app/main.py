@@ -2,9 +2,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
+from app.application.email_access import EmailSyncError
 from app.core.config import get_settings
 from app.infrastructure.db.repositories import (
     EntityNotFoundError,
+    ResourceConflictError,
     VersionConflictError,
 )
 
@@ -35,6 +37,26 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(ResourceConflictError)
+    def resource_conflict_handler(
+        request: Request,
+        exc: ResourceConflictError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(EmailSyncError)
+    def email_sync_handler(
+        request: Request,
+        exc: EmailSyncError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": str(exc)},
         )
     return application

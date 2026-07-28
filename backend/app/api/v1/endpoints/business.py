@@ -4,9 +4,18 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.application.crud import BusinessCrudService
+from app.application.email_access import (
+    EmailAccessService,
+    mask_email_address,
+)
 from app.application.schemas import (
+    EmailAccountCreate,
+    EmailAccountRead,
+    EmailConnectionTestResult,
     EmailDetail,
     EmailListItem,
+    EmailSyncRequest,
+    EmailSyncResult,
     JobApplicationCreate,
     JobApplicationRead,
     JobApplicationUpdate,
@@ -18,6 +27,7 @@ from app.application.schemas import (
     TaskUpdate,
 )
 from app.core.config import Settings, get_settings
+from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.session import get_db_session
 
 router = APIRouter()
@@ -32,6 +42,93 @@ def service(session: SessionDependency, settings: SettingsDependency) -> Busines
 
 
 ServiceDependency = Annotated[BusinessCrudService, Depends(service)]
+
+
+def email_access_service(
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> EmailAccessService:
+    return EmailAccessService(
+        session,
+        settings.demo_user_id,
+        timeout_seconds=settings.email_connect_timeout_seconds,
+        default_sync_limit=settings.email_sync_limit,
+        max_message_bytes=settings.email_max_message_bytes,
+    )
+
+
+EmailAccessDependency = Annotated[EmailAccessService, Depends(email_access_service)]
+
+
+def _account_read(account: EmailAccount) -> EmailAccountRead:
+    return EmailAccountRead(
+        id=account.id,
+        provider=account.provider,
+        email_address_masked=mask_email_address(account.email_address),
+        imap_host=account.imap_host,
+        imap_port=account.imap_port,
+        imap_security=account.imap_security,
+        smtp_host=account.smtp_host,
+        smtp_port=account.smtp_port,
+        smtp_security=account.smtp_security,
+        is_active=account.is_active,
+        inbox_uid_validity=account.inbox_uid_validity,
+        last_synced_uid=account.last_synced_uid,
+        last_sync_at=account.last_sync_at,
+        last_sync_status=account.last_sync_status,
+        last_sync_error=account.last_sync_error,
+        created_at=account.created_at,
+        updated_at=account.updated_at,
+    )
+
+
+@router.get(
+    "/email-accounts",
+    response_model=list[EmailAccountRead],
+    tags=["email-accounts"],
+)
+def list_email_accounts(
+    use_case: EmailAccessDependency,
+) -> list[EmailAccountRead]:
+    return [_account_read(account) for account in use_case.accounts.list()]
+
+
+@router.post(
+    "/email-accounts",
+    response_model=EmailAccountRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["email-accounts"],
+)
+def create_email_account(
+    payload: EmailAccountCreate,
+    use_case: EmailAccessDependency,
+) -> EmailAccountRead:
+    return _account_read(use_case.create_account(payload))
+
+
+@router.post(
+    "/email-accounts/{account_id}/test-connection",
+    response_model=EmailConnectionTestResult,
+    tags=["email-accounts"],
+)
+def test_email_account_connection(
+    account_id: int,
+    use_case: EmailAccessDependency,
+) -> EmailConnectionTestResult:
+    return use_case.test_connection(account_id)
+
+
+@router.post(
+    "/email-accounts/{account_id}/sync",
+    response_model=EmailSyncResult,
+    tags=["email-accounts"],
+)
+def sync_email_account(
+    account_id: int,
+    use_case: EmailAccessDependency,
+    payload: EmailSyncRequest | None = None,
+) -> EmailSyncResult:
+    return use_case.sync(account_id, limit=payload.limit if payload else None)
 
 
 @router.get("/emails", response_model=list[EmailListItem], tags=["emails"])

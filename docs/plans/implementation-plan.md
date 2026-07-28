@@ -2,7 +2,7 @@
 
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
-> 当前进度：前三阶段已完成；12 张核心表、基础 API、Classification/Extraction Agent 及三个真实模型基线已完成，下一步进入邮件接入与解析
+> 当前进度：前四阶段已完成；真实 163 IMAP/SMTP、两次增量同步、安全解析和 MySQL 幂等验收通过，下一步集成第五阶段单封邮件分析接口
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论
@@ -198,7 +198,7 @@ MVP 业务范围、非目标和验收场景已冻结，具体见 `docs/requireme
 5. 确定性 Orchestrator 协调 Classification、Extraction、Application、Reply 四个核心 Agent；不实现 Review Agent 和 LLM Supervisor。
 6. 有界手动同步与单封分析先同步执行，不引入 Celery/RQ。
 7. Vue 使用 REST + 状态轮询。
-8. 邮箱授权码只保存应用层加密密文，加密密钥由环境变量加载。
+8. MVP 数据库只保存 `credential_ref`，授权码从进程环境变量或受控 `.env` 配置读取，不写入数据库。
 
 完整理由、代价和升级条件见 `docs/architecture/architecture-decisions.md`。
 
@@ -305,7 +305,7 @@ account_id + source_folder + uid_validity + imap_uid
 
 ---
 
-### 第四阶段：实现邮件接入与解析（下一阶段）
+### 第四阶段：实现邮件接入与解析（已完成）
 
 #### 阶段目标
 

@@ -7,6 +7,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -19,6 +20,7 @@ from app.domain.enums import (
     ReplyDraftStatus,
     TaskStatus,
     TaskType,
+    TransportSecurity,
 )
 
 
@@ -34,6 +36,81 @@ class UtcResponseSchema(ApiSchema):
         if value.tzinfo is None:
             value = value.replace(tzinfo=UTC)
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+class EmailAccountCreate(ApiSchema):
+    provider: str = Field(min_length=1, max_length=32)
+    email_address: str = Field(min_length=3, max_length=320)
+    imap_host: str = Field(min_length=1, max_length=255)
+    imap_port: int = Field(gt=0, le=65535)
+    imap_security: TransportSecurity
+    smtp_host: str = Field(min_length=1, max_length=255)
+    smtp_port: int = Field(gt=0, le=65535)
+    smtp_security: TransportSecurity
+    credential_ref: str = Field(
+        min_length=3,
+        max_length=128,
+        pattern=r"^[A-Z][A-Z0-9_]+$",
+    )
+    is_active: bool = True
+
+    @field_validator("provider", "imap_host", "smtp_host", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email_address")
+    @classmethod
+    def normalize_email_address(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        local, separator, domain = normalized.rpartition("@")
+        if not separator or not local or "." not in domain:
+            raise ValueError("email_address must be a valid mailbox address")
+        return normalized
+
+
+class EmailAccountRead(UtcResponseSchema):
+    id: int
+    provider: str
+    email_address_masked: str
+    imap_host: str
+    imap_port: int
+    imap_security: TransportSecurity
+    smtp_host: str
+    smtp_port: int
+    smtp_security: TransportSecurity
+    is_active: bool
+    inbox_uid_validity: int | None
+    last_synced_uid: int | None
+    last_sync_at: datetime | None
+    last_sync_status: str | None
+    last_sync_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConnectionCheck(ApiSchema):
+    success: bool
+    message: str
+
+
+class EmailConnectionTestResult(ApiSchema):
+    imap: ConnectionCheck
+    smtp: ConnectionCheck
+
+
+class EmailSyncRequest(ApiSchema):
+    limit: int | None = Field(default=None, ge=1, le=200)
+
+
+class EmailSyncResult(ApiSchema):
+    account_id: int
+    folder: str
+    uid_validity: int
+    examined: int
+    created: int
+    skipped: int
+    failed: int
 
 
 class EmailListItem(UtcResponseSchema):

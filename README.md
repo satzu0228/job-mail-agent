@@ -4,14 +4,14 @@
 
 前三阶段已经完成：MVP 与架构边界已冻结，12 张核心业务表、三批 Alembic 迁移、
 分析结果版本化持久化，以及邮件、求职记录、任务和回复草稿基础 API 已在本地
-MySQL 8 验证。Classification 和 Extraction 的正式 Agent、DeepSeek 模型适配、
-版本化 Prompt 以及首批脱敏邮件 Fixture 也已实现，三封 Fixture 的真实模型基线
-均已通过。下一步进入第四阶段，实现邮箱账户配置、IMAP 同步和安全邮件解析。
+MySQL 8 验证。第四阶段的邮箱账户配置、IMAP/SMTP 连接测试、INBOX 有界增量同步、
+MIME/HTML 安全解析和幂等入库已实现，并已通过真实 163 邮箱与 MySQL 验收。
+Classification 和 Extraction 的离线切片也已提前完成。
 项目背景和长期协作约定见
 [AGENTS.md](AGENTS.md)。
 
-当前已完成第三阶段“设计数据库并建立基础接口”，即将进入第四阶段“实现邮件接入
-与解析”。
+当前第四阶段“实现邮件接入与解析”已完成，下一步进入第五阶段的单封邮件分析
+接口集成。
 
 全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 

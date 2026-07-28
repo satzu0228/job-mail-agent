@@ -24,7 +24,7 @@
 
 ### 当前阶段
 
-项目第一阶段“运行和分析 Email-AI-Agent 参考项目”、第二阶段“冻结 MVP 边界并搭建项目骨架”和第三阶段“设计数据库并建立基础接口”均已完成。12 张核心表、三批 Alembic 迁移、分析结果版本化持久化，以及邮件、求职记录、任务和回复草稿的基础接口均已通过真实 MySQL 和自动化测试验证。为降低后续联调风险，已经提前完成第五阶段中 Classification 与 Extraction 的离线切片，包括 Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 模型适配和三个真实模型基线；当前共 40 个测试通过。下一步进入第四阶段“实现邮件接入与解析”，先完成邮箱账户配置、IMAP 手动同步、MIME/HTML 安全解析和邮件幂等入库。
+项目第一阶段“运行和分析 Email-AI-Agent 参考项目”、第二阶段“冻结 MVP 边界并搭建项目骨架”、第三阶段“设计数据库并建立基础接口”和第四阶段“实现邮件接入与解析”均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。自动化测试、Ruff、Alembic 和真实 MySQL 验证均通过，当前共 50 个测试通过。为降低后续联调风险，已提前完成第五阶段中 Classification 与 Extraction 的离线切片，包括 Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 模型适配和三个真实模型基线；下一步补齐单封邮件 classify/extract/analyze API 与正式邮件分析结果持久化链路。
 
 - 第三方参考仓库统一放在 `references/`，不纳入本项目版本历史。
 - 针对参考项目的非侵入式实验放在 `experiments/email-ai-agent/`。

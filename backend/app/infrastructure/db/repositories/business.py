@@ -16,8 +16,43 @@ class VersionConflictError(RuntimeError):
     pass
 
 
+class ResourceConflictError(RuntimeError):
+    pass
+
+
 def _paginate(statement: Select[tuple[object]], *, offset: int, limit: int) -> Select:
     return statement.offset(offset).limit(limit)
+
+
+class EmailAccountRepository:
+    def __init__(self, session: Session, user_id: int) -> None:
+        self._session = session
+        self._user_id = user_id
+
+    def list(self) -> list[EmailAccount]:
+        statement = (
+            select(EmailAccount)
+            .where(EmailAccount.user_id == self._user_id)
+            .order_by(EmailAccount.id)
+        )
+        return list(self._session.scalars(statement))
+
+    def get(self, account_id: int, *, for_update: bool = False) -> EmailAccount:
+        statement = select(EmailAccount).where(
+            EmailAccount.id == account_id,
+            EmailAccount.user_id == self._user_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        account = self._session.scalar(statement)
+        if account is None:
+            raise EntityNotFoundError(f"Email account {account_id} does not exist")
+        return account
+
+    def add(self, account: EmailAccount) -> EmailAccount:
+        self._session.add(account)
+        self._session.flush()
+        return account
 
 
 class EmailRepository:
@@ -43,6 +78,41 @@ class EmailRepository:
         email = self._session.scalar(statement)
         if email is None:
             raise EntityNotFoundError(f"Email {email_id} does not exist")
+        return email
+
+    def find_by_imap_identity(
+        self,
+        *,
+        account_id: int,
+        source_folder: str,
+        uid_validity: int,
+        imap_uid: int,
+    ) -> Email | None:
+        return self._session.scalar(
+            select(Email).where(
+                Email.account_id == account_id,
+                Email.source_folder == source_folder,
+                Email.uid_validity == uid_validity,
+                Email.imap_uid == imap_uid,
+            )
+        )
+
+    def find_by_message_id(
+        self,
+        *,
+        account_id: int,
+        message_id: str,
+    ) -> Email | None:
+        return self._session.scalar(
+            select(Email).where(
+                Email.account_id == account_id,
+                Email.message_id == message_id,
+            )
+        )
+
+    def add(self, email: Email) -> Email:
+        self._session.add(email)
+        self._session.flush()
         return email
 
 
