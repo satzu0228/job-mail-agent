@@ -2,7 +2,7 @@
 
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
-> 当前进度：前四阶段已完成；真实 163 IMAP/SMTP、两次增量同步、安全解析和 MySQL 幂等验收通过，下一步集成第五阶段单封邮件分析接口
+> 当前进度：前五阶段已完成；单封邮件 classify/extract/analyze API、非求职短路、版本化持久化及真实 DeepSeek/MySQL 联调通过，下一步进入求职记录与状态管理
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论
@@ -362,7 +362,7 @@ POST /api/email-accounts/{id}/sync
 
 ---
 
-### 第五阶段：实现单封邮件 AI 分析
+### 第五阶段：实现单封邮件 AI 分析（已完成）
 
 #### 阶段目标
 

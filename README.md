@@ -6,12 +6,12 @@
 分析结果版本化持久化，以及邮件、求职记录、任务和回复草稿基础 API 已在本地
 MySQL 8 验证。第四阶段的邮箱账户配置、IMAP/SMTP 连接测试、INBOX 有界增量同步、
 MIME/HTML 安全解析和幂等入库已实现，并已通过真实 163 邮箱与 MySQL 验收。
-Classification 和 Extraction 的离线切片也已提前完成。
+第五阶段的 Classification/Extraction Agent、单封邮件 API、非求职短路和分析结果
+版本化持久化也已完成，并通过脱敏 Fixture、真实 DeepSeek 和 MySQL 联调。
 项目背景和长期协作约定见
 [AGENTS.md](AGENTS.md)。
 
-当前第四阶段“实现邮件接入与解析”已完成，下一步进入第五阶段的单封邮件分析
-接口集成。
+当前前五阶段已完成，下一步进入第六阶段“求职记录和状态管理”。
 
 全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 

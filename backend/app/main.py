@@ -3,12 +3,18 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.application.email_access import EmailSyncError
+from app.application.email_analysis import (
+    EmailModelExecutionError,
+    EmailNotReadyForAnalysisError,
+    NonJobEmailExtractionError,
+)
 from app.core.config import get_settings
 from app.infrastructure.db.repositories import (
     EntityNotFoundError,
     ResourceConflictError,
     VersionConflictError,
 )
+from app.infrastructure.llm import LLMConfigurationError
 
 
 def create_app() -> FastAPI:
@@ -57,6 +63,37 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(EmailNotReadyForAnalysisError)
+    @application.exception_handler(NonJobEmailExtractionError)
+    def analysis_conflict_handler(
+        request: Request,
+        exc: EmailNotReadyForAnalysisError | NonJobEmailExtractionError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(EmailModelExecutionError)
+    def model_execution_handler(
+        request: Request,
+        exc: EmailModelExecutionError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(LLMConfigurationError)
+    def model_configuration_handler(
+        request: Request,
+        exc: LLMConfigurationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": str(exc)},
         )
     return application

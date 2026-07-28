@@ -110,3 +110,10 @@ class Email(TimestampMixin, Base):
         back_populates="email",
         order_by="EmailAnalysis.version",
     )
+
+    @property
+    def current_analysis(self) -> EmailAnalysis | None:
+        return next(
+            (analysis for analysis in reversed(self.analyses) if analysis.is_current),
+            None,
+        )

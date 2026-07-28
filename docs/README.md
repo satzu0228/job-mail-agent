@@ -34,6 +34,8 @@
   开发问题、验证结果和下一步。
 - [第四阶段完成记录](phase-4/email-access-and-parsing-progress.md)：邮箱账户、连接测试、
   IMAP 增量同步、MIME/HTML 安全解析、幂等入库与真实 163 邮箱验收。
+- [第五阶段完成记录](phase-5/single-email-analysis-progress.md)：单封邮件分类、抽取、
+  统一分析 API、版本化持久化与真实模型联调。
 
 ## 文档职责规则
 

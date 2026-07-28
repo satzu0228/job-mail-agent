@@ -11,12 +11,17 @@ from pydantic import (
     model_validator,
 )
 
+from app.agents.classification.schemas import ClassificationOutput
+from app.agents.extraction.schemas import ExtractionOutput
 from app.domain.enums import (
     ApplicationSource,
     ApplicationStage,
     ApplicationStatus,
     ArchiveStatus,
+    EmailAnalysisStatus,
+    EmailCategory,
     EmailParseStatus,
+    EmailPriority,
     ReplyDraftStatus,
     TaskStatus,
     TaskType,
@@ -113,6 +118,17 @@ class EmailSyncResult(ApiSchema):
     failed: int
 
 
+class EmailAnalyzeResponse(UtcResponseSchema):
+    analysis_id: int
+    email_id: int
+    version: int
+    status: EmailAnalysisStatus
+    is_current: bool
+    created_at: datetime
+    classification: ClassificationOutput
+    extraction: ExtractionOutput | None
+
+
 class EmailListItem(UtcResponseSchema):
     id: int
     account_id: int
@@ -125,6 +141,32 @@ class EmailListItem(UtcResponseSchema):
     archive_status: ArchiveStatus
 
 
+class EmailAnalysisRead(UtcResponseSchema):
+    id: int
+    email_id: int
+    version: int
+    is_current: bool
+    status: EmailAnalysisStatus
+    is_job_related: bool
+    category: EmailCategory
+    priority: EmailPriority
+    should_reply: bool
+    classification_confidence: float
+    extraction_confidence: float | None
+    summary: str | None
+    company_name: str | None
+    position_name: str | None
+    event_type: str | None
+    event_time: datetime | None
+    deadline_at: datetime | None
+    source_timezone: str | None
+    extraction_json: dict[str, Any]
+    evidence_json: dict[str, Any]
+    missing_fields: list[str]
+    schema_version: str
+    created_at: datetime
+
+
 class EmailDetail(EmailListItem):
     message_id: str | None
     to_recipients: list[dict[str, Any]]
@@ -133,6 +175,7 @@ class EmailDetail(EmailListItem):
     plain_body: str | None
     html_sanitized: str | None
     attachment_metadata: list[dict[str, Any]]
+    current_analysis: EmailAnalysisRead | None = None
 
 
 class JobApplicationCreate(ApiSchema):
