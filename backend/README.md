@@ -1,10 +1,10 @@
 # Backend
 
 正式系统的 FastAPI 后端。当前已建立应用入口、版本化路由、配置、SQLAlchemy
-Session、Alembic 环境和基础测试，并完成第一批 `users`、`email_accounts`、
-`job_applications`、`emails` ORM 模型及 `20260727_0001` 迁移。其余八张业务表
-继续按数据库设计分批实现。Classification 与 Extraction 的版本化 Pydantic
-Schema、Prompt、正式 Agent 和 DeepSeek 模型适配已经建立。
+Session、Alembic 环境和基础测试，并完成 12 张核心业务表与三批迁移。邮件查询、
+求职记录、任务和回复草稿基础 API 已建立；关键申请阶段、草稿批准和外部动作仍
+必须通过后续审核流程，普通 PATCH 不提供绕过入口。Classification 与 Extraction
+的版本化 Pydantic Schema、Prompt、正式 Agent 和 DeepSeek 模型适配已经建立。
 面试邀请、拒信和非求职促销三个脱敏 Fixture 的真实模型调用均已通过。
 
 数据库字段和迁移顺序以
@@ -24,6 +24,10 @@ uvicorn app.main:app --reload
 
 - API 文档：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/v1/health>
+- 邮件查询：<http://127.0.0.1:8000/api/v1/emails>
+- 求职记录：<http://127.0.0.1:8000/api/v1/job-applications>
+- 任务日程：<http://127.0.0.1:8000/api/v1/tasks>
+- 回复草稿：<http://127.0.0.1:8000/api/v1/reply-drafts>
 
 配置 `JOB_MAIL_LLM_API_KEY` 后，可使用脱敏邮件执行一次真实分类与抽取：
 

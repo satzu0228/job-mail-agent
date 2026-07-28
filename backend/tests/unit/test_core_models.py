@@ -3,17 +3,37 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 import app.infrastructure.db.models  # noqa: F401
-from app.domain.enums import ApplicationStage, ArchiveStatus, EmailParseStatus
+from app.domain.enums import (
+    ApplicationStage,
+    ArchiveStatus,
+    EmailParseStatus,
+    TaskStatus,
+)
 from app.infrastructure.db.base import Base
-from app.infrastructure.db.models import Email, JobApplication
+from app.infrastructure.db.models import (
+    AutomationRule,
+    Email,
+    EmailAnalysis,
+    JobApplication,
+    ReviewTask,
+    Task,
+)
 
 
-def test_first_migration_metadata_contains_only_four_business_tables() -> None:
+def test_metadata_contains_all_twelve_business_tables() -> None:
     assert set(Base.metadata.tables) == {
+        "action_executions",
+        "application_events",
+        "automation_rules",
         "users",
         "email_accounts",
         "job_applications",
         "emails",
+        "email_analyses",
+        "reply_drafts",
+        "review_tasks",
+        "tasks",
+        "workflow_runs",
     }
 
 
@@ -72,6 +92,24 @@ def test_message_id_uses_mysql_prefix_index() -> None:
 
 def test_model_defaults_and_optimistic_lock_configuration() -> None:
     assert JobApplication.__mapper__.version_id_col is JobApplication.__table__.c.version
+    assert Task.__mapper__.version_id_col is Task.__table__.c.version
+    assert ReviewTask.__mapper__.version_id_col is ReviewTask.__table__.c.version
+    assert AutomationRule.__mapper__.version_id_col is AutomationRule.__table__.c.version
     assert Email.__table__.c.parse_status.default.arg == EmailParseStatus.PENDING
     assert Email.__table__.c.archive_status.default.arg == ArchiveStatus.NONE
     assert JobApplication.__table__.c.current_stage.default.arg == ApplicationStage.APPLIED
+    assert Task.__table__.c.status.default.arg == TaskStatus.PENDING
+    assert AutomationRule.__table__.c.is_enabled.default.arg is False
+    assert AutomationRule.__table__.c.requires_confirmation.default.arg is True
+
+
+def test_email_analysis_version_and_workflow_run_are_unique() -> None:
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in EmailAnalysis.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("email_id", "version") in unique_columns
+    assert ("workflow_run_id",) in unique_columns
+    assert EmailAnalysis.__table__.c.extraction_confidence.nullable is True

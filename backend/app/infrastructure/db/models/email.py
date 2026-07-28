@@ -18,6 +18,7 @@ from app.infrastructure.db.base import (
 
 if TYPE_CHECKING:
     from app.infrastructure.db.models.email_account import EmailAccount
+    from app.infrastructure.db.models.email_analysis import EmailAnalysis
     from app.infrastructure.db.models.job_application import JobApplication
 
 
@@ -105,3 +106,7 @@ class Email(TimestampMixin, Base):
 
     account: Mapped[EmailAccount] = relationship(back_populates="emails")
     application: Mapped[JobApplication | None] = relationship(back_populates="emails")
+    analyses: Mapped[list[EmailAnalysis]] = relationship(
+        back_populates="email",
+        order_by="EmailAnalysis.version",
+    )

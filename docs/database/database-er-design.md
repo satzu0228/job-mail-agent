@@ -207,7 +207,7 @@ UNIQUE(account_id, source_folder, uid_validity, imap_uid)
 | `priority` | VARCHAR(16) | `LOW/MEDIUM/HIGH/URGENT` |
 | `should_reply` | BOOLEAN |  |
 | `classification_confidence` | DECIMAL(5,4) | 0～1 |
-| `extraction_confidence` | DECIMAL(5,4) | 0～1 |
+| `extraction_confidence` | DECIMAL(5,4) | 可空、0～1；`NON_JOB` 不执行抽取 |
 | `summary` | TEXT | 可空 |
 | `company_name` | VARCHAR(255) | 可空 |
 | `position_name` | VARCHAR(255) | 可空 |
@@ -226,6 +226,7 @@ UNIQUE(account_id, source_folder, uid_validity, imap_uid)
 - UNIQUE(`email_id`, `version`)
 - 应用事务保证同一邮件只有一个 `is_current=true`
 - 模型结果不能直接覆盖申请当前阶段
+- `workflow_run_id` 由第三迁移在 `workflow_runs` 创建后补加外键
 
 ### 5.5 `job_applications`
 
@@ -523,21 +524,23 @@ emails
 
 `job_applications` 提前创建，是因为 `emails.application_id` 直接引用它。
 
-### 002：分析、时间线和任务
+### 002：分析结果
+
+状态：已实现，迁移版本 `20260728_0002`。
+
+```text
+email_analyses
+```
+
+### 003：工作流、时间线、任务、审核和执行
+
+状态：已实现，迁移版本 `20260728_0003`；循环外键在目标表创建后补充。
 
 ```text
 workflow_runs
-email_analyses
 application_events
 tasks
 reply_drafts
-```
-
-循环引用字段先允许为空，待目标表存在后补外键。
-
-### 003：审核、执行和自动化
-
-```text
 review_tasks
 action_executions
 automation_rules
@@ -547,18 +550,18 @@ workflow_runs.pending_review_task_id 外键
 
 ## 8. 数据库验收清单
 
-- [ ] 12张表可以从空 MySQL 数据库通过 Alembic 创建。
-- [ ] 最近一个迁移可以回滚。
-- [ ] 同一 `(account, source_folder, UIDVALIDITY, UID)` 无法重复插入。
-- [ ] 缺失或重复 `Message-ID` 不阻止合法邮件保存。
-- [ ] 一封邮件最多关联一个申请。
-- [ ] 分类和抽取结果可以版本化保存。
-- [ ] 模型建议不能直接修改 `job_applications.current_stage`。
+- [x] 12张表可以从空 MySQL 数据库通过 Alembic 创建。
+- [x] 最近一个迁移可生成逆依赖顺序正确的降级 SQL。
+- [x] 同一 `(account, source_folder, UIDVALIDITY, UID)` 无法重复插入。
+- [x] 缺失或重复 `Message-ID` 不阻止合法邮件保存。
+- [x] 一封邮件最多关联一个申请。
+- [x] 分类和抽取结果可以版本化保存。
+- [x] 模型建议不能通过基础 API 直接修改 `job_applications.current_stage`。
 - [ ] 未获批的 `review_tasks` 无法执行外部动作。
 - [ ] 同一幂等键不能创建两个执行。
 - [ ] SMTP `UNKNOWN` 不会自动重试。
 - [ ] 面试和截止日期能生成 `tasks` 并在日历展示。
-- [ ] 归档规则默认关闭且默认需要确认。
+- [x] 归档规则默认关闭且默认需要确认。
 - [ ] 归档成功后可以根据 `previous_folder` 提出恢复动作。
 - [ ] Agent 轨迹可以从 `workflow_runs.agent_trace` 查询。
 - [ ] 授权码不出现在数据库、API Schema 和日志中。

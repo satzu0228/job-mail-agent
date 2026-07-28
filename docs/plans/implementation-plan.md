@@ -2,7 +2,7 @@
 
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
-> 当前进度：第一阶段已完成；正式后端、首批四表、Classification/Extraction Agent 及三个真实模型基线已完成，下一步持久化分析结果
+> 当前进度：前三阶段已完成；12 张核心表、基础 API、Classification/Extraction Agent 及三个真实模型基线已完成，下一步进入邮件接入与解析
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论
@@ -260,7 +260,7 @@ backend/app/
 
 ---
 
-### 第三阶段：设计数据库并建立基础接口（当前阶段）
+### 第三阶段：设计数据库并建立基础接口（已完成）
 
 #### 阶段目标
 
@@ -305,7 +305,7 @@ account_id + source_folder + uid_validity + imap_uid
 
 ---
 
-### 第四阶段：实现邮件接入与解析
+### 第四阶段：实现邮件接入与解析（下一阶段）
 
 #### 阶段目标
 

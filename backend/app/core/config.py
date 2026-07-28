@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
+    demo_user_id: int = Field(default=1, gt=0)
 
     database_url: str = (
         "mysql+pymysql://job_mail:change-me@127.0.0.1:3306/"

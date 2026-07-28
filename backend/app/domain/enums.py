@@ -60,6 +60,97 @@ class EmailPriority(StrEnum):
     URGENT = "URGENT"
 
 
+class EmailAnalysisStatus(StrEnum):
+    VALID = "VALID"
+    PENDING_CONFIRMATION = "PENDING_CONFIRMATION"
+    INVALID = "INVALID"
+
+
+class TaskType(StrEnum):
+    INTERVIEW = "INTERVIEW"
+    ASSESSMENT = "ASSESSMENT"
+    MATERIAL = "MATERIAL"
+    DEADLINE = "DEADLINE"
+    OTHER = "OTHER"
+
+
+class TaskStatus(StrEnum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class ReplyDraftStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    MODIFIED_AND_APPROVED = "MODIFIED_AND_APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class WorkflowRunStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    WAITING_REVIEW = "WAITING_REVIEW"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ReviewActionType(StrEnum):
+    CREATE_APPLICATION = "CREATE_APPLICATION"
+    LINK_APPLICATION = "LINK_APPLICATION"
+    UPDATE_APPLICATION_STAGE = "UPDATE_APPLICATION_STAGE"
+    CREATE_TASK = "CREATE_TASK"
+    UPDATE_TASK = "UPDATE_TASK"
+    SEND_REPLY = "SEND_REPLY"
+    ARCHIVE_EMAIL = "ARCHIVE_EMAIL"
+    RESTORE_EMAIL = "RESTORE_EMAIL"
+
+
+class RiskLevel(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class ReviewTaskStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+    EXECUTING = "EXECUTING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class DecisionSource(StrEnum):
+    USER = "USER"
+    RULE = "RULE"
+
+
+class ExecutorType(StrEnum):
+    APPLICATION = "APPLICATION"
+    TASK = "TASK"
+    SMTP = "SMTP"
+    IMAP = "IMAP"
+
+
+class ExecutionStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class AutomationRuleType(StrEnum):
+    LOW_PRIORITY_ARCHIVE = "LOW_PRIORITY_ARCHIVE"
+
+
 class RequiredCapability(StrEnum):
     EXTRACT = "EXTRACT"
     MATCH_APPLICATION = "MATCH_APPLICATION"
