@@ -450,6 +450,9 @@ POST /api/emails/{id}/analyze
 
 将邮件分析结果转化为求职流程数据。
 
+> 阶段状态：已完成（2026-07-28）。实现证据见
+> `docs/phase-6/application-management-progress.md`。
+
 #### 开发内容
 
 实现求职记录匹配：

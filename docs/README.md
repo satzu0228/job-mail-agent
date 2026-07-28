@@ -36,6 +36,8 @@
   IMAP 增量同步、MIME/HTML 安全解析、幂等入库与真实 163 邮箱验收。
 - [第五阶段完成记录](phase-5/single-email-analysis-progress.md)：单封邮件分类、抽取、
   统一分析 API、版本化持久化与真实模型联调。
+- [第六阶段完成记录](phase-6/application-management-progress.md)：确定性候选查询、
+  Application Agent、申请状态机、审核与幂等执行边界。
 
 ## 文档职责规则
 

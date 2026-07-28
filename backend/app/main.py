@@ -2,6 +2,10 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
+from app.application.application_management import (
+    ApplicationAnalysisUnavailableError,
+    ApplicationModelExecutionError,
+)
 from app.application.email_access import EmailSyncError
 from app.application.email_analysis import (
     EmailModelExecutionError,
@@ -78,12 +82,23 @@ def create_app() -> FastAPI:
         )
 
     @application.exception_handler(EmailModelExecutionError)
+    @application.exception_handler(ApplicationModelExecutionError)
     def model_execution_handler(
         request: Request,
-        exc: EmailModelExecutionError,
+        exc: EmailModelExecutionError | ApplicationModelExecutionError,
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(ApplicationAnalysisUnavailableError)
+    def application_analysis_conflict_handler(
+        request: Request,
+        exc: ApplicationAnalysisUnavailableError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc)},
         )
 

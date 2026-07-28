@@ -8,7 +8,8 @@ Session、Alembic 环境和基础测试，并完成 12 张核心业务表与三�
 面试邀请、拒信和非求职促销三个脱敏 Fixture 的真实模型调用均已通过。
 邮箱账户配置、IMAP/SMTP 连接测试、INBOX 有界增量同步、MIME/HTML 安全解析及
 幂等入库已经实现。单封邮件分类、抽取、统一分析 API 和分析结果版本化持久化
-也已完成。
+也已完成。第六阶段已增加确定性申请候选评分、Application Agent、申请状态机和
+人工审核执行链路；模型建议不会直接关联申请或修改关键阶段。
 
 数据库字段和迁移顺序以
 [`../docs/database/database-er-design.md`](../docs/database/database-er-design.md) 为准。
@@ -32,7 +33,9 @@ uvicorn app.main:app --reload
 - 单封分类：`POST /api/v1/emails/{id}/classify`
 - 单封抽取：`POST /api/v1/emails/{id}/extract`
 - 统一分析：`POST /api/v1/emails/{id}/analyze`
+- 申请匹配：`POST /api/v1/emails/{id}/match-application`
 - 求职记录：<http://127.0.0.1:8000/api/v1/job-applications>
+- 审核任务：<http://127.0.0.1:8000/api/v1/review-tasks>
 - 任务日程：<http://127.0.0.1:8000/api/v1/tasks>
 - 回复草稿：<http://127.0.0.1:8000/api/v1/reply-drafts>
 

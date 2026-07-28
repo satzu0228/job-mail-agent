@@ -11,6 +11,10 @@ from pydantic import (
     model_validator,
 )
 
+from app.agents.application.schemas import (
+    ApplicationAgentOutput,
+    ApplicationCandidate,
+)
 from app.agents.classification.schemas import ClassificationOutput
 from app.agents.extraction.schemas import ExtractionOutput
 from app.domain.enums import (
@@ -18,11 +22,17 @@ from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
     ArchiveStatus,
+    DecisionSource,
     EmailAnalysisStatus,
     EmailCategory,
     EmailParseStatus,
     EmailPriority,
+    ExecutionStatus,
+    ExecutorType,
     ReplyDraftStatus,
+    ReviewActionType,
+    ReviewTaskStatus,
+    RiskLevel,
     TaskStatus,
     TaskType,
     TransportSecurity,
@@ -218,6 +228,63 @@ class JobApplicationRead(UtcResponseSchema):
     version: int
     created_at: datetime
     updated_at: datetime
+
+
+class ApplicationMatchResponse(UtcResponseSchema):
+    email_id: int
+    analysis_id: int
+    candidates: list[ApplicationCandidate]
+    suggestion: ApplicationAgentOutput
+    review_task_id: str
+    requires_human_confirmation: bool = True
+
+
+class ReviewDecision(ApiSchema):
+    version: int = Field(gt=0)
+    approve: bool
+    reviewed_payload: dict[str, Any] | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class ReviewTaskRead(UtcResponseSchema):
+    id: str
+    user_id: int
+    workflow_run_id: str
+    source_email_id: int | None
+    application_id: int | None
+    draft_id: int | None
+    action_type: ReviewActionType
+    risk_level: RiskLevel
+    proposed_payload: dict[str, Any]
+    reviewed_payload: dict[str, Any] | None
+    status: ReviewTaskStatus
+    decision_source: DecisionSource | None
+    decision_reason: str | None
+    reviewed_at: datetime | None
+    resource_version: int
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ActionExecutionRead(UtcResponseSchema):
+    id: int
+    review_task_id: str
+    attempt_no: int
+    executor_type: ExecutorType
+    status: ExecutionStatus
+    external_reference: str | None
+    result: dict[str, Any] | None
+    started_at: datetime
+    finished_at: datetime | None
+    error_code: str | None
+    error_message: str | None
+
+
+class ReviewDecisionResponse(ApiSchema):
+    review_task: ReviewTaskRead
+    execution: ActionExecutionRead | None = None
+    follow_up_review_task: ReviewTaskRead | None = None
 
 
 class TaskCreate(ApiSchema):

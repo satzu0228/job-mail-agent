@@ -24,7 +24,7 @@
 
 ### 当前阶段
 
-项目第一至第五阶段均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。第五阶段已完成 Classification/Extraction Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 适配、`classify`/`extract`/`analyze` API、非求职短路、邮件详情当前分析展示及 `email_analyses` 版本化持久化；脱敏面试 Fixture 经正式 API、真实 DeepSeek 和 MySQL 联调返回 `INTERVIEW`，分类与抽取置信度均为 0.95。当前共 59 个测试通过。下一步进入第六阶段，实现确定性候选申请查询、Application Agent 建议、状态机校验及人工确认边界。
+项目第一至第六阶段均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。第五阶段已完成 Classification/Extraction Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 适配、`classify`/`extract`/`analyze` API、非求职短路、邮件详情当前分析展示及 `email_analyses` 版本化持久化；脱敏面试 Fixture 经正式 API、真实 DeepSeek 和 MySQL 联调返回 `INTERVIEW`，分类与抽取置信度均为 0.95。第六阶段已完成确定性候选申请评分、Application Agent、`match-application` API、申请状态机、审核任务与幂等申请执行边界；关联/新建和阶段变化分两次审核，同阶段通知只写时间线事件；Stub Agent 下的真实 MySQL 新建、关联、阶段审核和时间线闭环已通过，临时数据已清理。当前共 73 个测试通过。下一步进入第七阶段，将分类、抽取、申请匹配与审核节点整合为可中断和恢复的 LangGraph 工作流。
 
 - 第三方参考仓库统一放在 `references/`，不纳入本项目版本历史。
 - 针对参考项目的非侵入式实验放在 `experiments/email-ai-agent/`。
