@@ -158,13 +158,20 @@ IMAP 收件
 
 ```json
 {
+  "schema_version": "classification-output.v1",
   "is_job_related": true,
   "category": "INTERVIEW",
   "priority": "HIGH",
   "should_reply": true,
-  "required_capabilities": ["extract", "match_application", "draft_reply"],
+  "required_capabilities": ["EXTRACT", "MATCH_APPLICATION", "DRAFT_REPLY"],
   "confidence": 0.96,
-  "evidence": ["邮件明确邀请候选人参加线上面试"]
+  "evidence": [
+    {
+      "source": "BODY",
+      "quote": "邀请您参加后端开发工程师线上面试"
+    }
+  ],
+  "uncertainties": []
 }
 ```
 
@@ -188,16 +195,45 @@ IMAP 收件
 
 ```json
 {
-  "company": {"value": "星海科技", "source": "邮件签名"},
-  "position": {"value": "后端开发工程师", "source": "邮件主题"},
-  "event_time": {
-    "raw": "本周五下午两点",
-    "normalized": "2026-07-17T14:00:00+08:00",
-    "confidence": 0.88
+  "schema_version": "extraction-output.v1",
+  "summary": "星海科技邀请候选人参加后端开发工程师线上面试。",
+  "company": {
+    "value": "星海科技",
+    "confidence": 0.98,
+    "evidence": [{"source": "BODY", "quote": "星海科技"}]
   },
-  "missing_fields": []
+  "position": {
+    "value": "后端开发工程师",
+    "confidence": 0.96,
+    "evidence": [{"source": "SUBJECT", "quote": "后端开发工程师面试邀请"}]
+  },
+  "event_time": {
+    "raw_text": "本周五下午两点",
+    "normalized": "2026-07-17T14:00:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "confidence": 0.88,
+    "evidence": [{"source": "BODY", "quote": "本周五下午两点"}],
+    "requires_human_confirmation": false,
+    "ambiguity_reason": null
+  },
+  "overall_confidence": 0.91,
+  "missing_fields": [
+    "PROPOSED_STAGE",
+    "EVENT_TYPE",
+    "CONTACT_NAME",
+    "CONTACT_EMAIL",
+    "DEADLINE",
+    "LOCATION",
+    "MEETING_URL",
+    "MATERIALS"
+  ],
+  "uncertainties": []
 }
 ```
+
+当前 Pydantic 契约位于 `backend/app/agents/classification/schemas.py` 和
+`backend/app/agents/extraction/schemas.py`。所有 Schema 禁止未知字段，置信度限制为
+0～1，时间使用带时区值并保留原文和证据。
 
 ### 6.4 Application Agent（求职记录与状态）
 

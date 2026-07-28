@@ -3,8 +3,15 @@
 毕业设计：**基于大语言模型与多智能体协作的求职邮件智能管理系统设计与实现**。
 
 第一阶段的参考项目运行与分析已经完成，MVP、架构和数据库逻辑 ER 已收敛。
-FastAPI、SQLAlchemy 和 Alembic 后端骨架已经建立，下一步是实现第一批 ORM 模型和
-Alembic 迁移。项目背景和长期协作约定见 [AGENTS.md](AGENTS.md)。
+FastAPI 后端骨架以及 `users`、`email_accounts`、`job_applications`、`emails`
+四个 ORM 模型和首批 Alembic 迁移已经实现，并已在本地 MySQL 8 成功执行首次
+`upgrade head`、`current` 和 `check`。Classification 和 Extraction 的正式 Agent、
+DeepSeek 模型适配、版本化 Prompt 以及首批脱敏邮件 Fixture 已实现，三封 Fixture
+的真实模型基线均已通过。下一步是接入分析结果持久化。项目背景和长期协作约定见
+[AGENTS.md](AGENTS.md)。
+
+当前已完成第二阶段“冻结 MVP 边界并搭建项目骨架”，正在进行第三阶段“设计数据库
+并建立基础接口”。
 
 全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 
@@ -14,7 +21,6 @@ Alembic 迁移。项目背景和长期协作约定见 [AGENTS.md](AGENTS.md)。
 job-mail-agent/
 ├── AGENTS.md                       # 项目长期背景与协作规则
 ├── README.md                       # 项目入口
-├── .env.example                    # 环境变量示例，不包含真实凭据
 ├── references/                     # 第三方参考项目，不纳入本项目版本历史
 ├── experiments/email-ai-agent/     # 针对参考项目的独立实验与测试数据
 ├── docs/                           # 按需求、架构、数据库、计划和阶段记录分类
@@ -26,9 +32,8 @@ job-mail-agent/
 ## 后端开始方式
 
 ```powershell
+conda activate job-mail-agent
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 uvicorn app.main:app --reload

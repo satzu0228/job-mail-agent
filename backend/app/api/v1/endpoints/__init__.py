@@ -1,1 +1,1 @@
-"""Version 1 endpoint modules."""
+"""第一版 API 端点模块。"""

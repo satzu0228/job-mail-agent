@@ -1,7 +1,11 @@
 # Backend
 
 正式系统的 FastAPI 后端。当前已建立应用入口、版本化路由、配置、SQLAlchemy
-Session、Alembic 环境和基础测试；12 张业务表将在下一步按数据库设计分批实现。
+Session、Alembic 环境和基础测试，并完成第一批 `users`、`email_accounts`、
+`job_applications`、`emails` ORM 模型及 `20260727_0001` 迁移。其余八张业务表
+继续按数据库设计分批实现。Classification 与 Extraction 的版本化 Pydantic
+Schema、Prompt、正式 Agent 和 DeepSeek 模型适配已经建立。
+面试邀请、拒信和非求职促销三个脱敏 Fixture 的真实模型调用均已通过。
 
 数据库字段和迁移顺序以
 [`../docs/database/database-er-design.md`](../docs/database/database-er-design.md) 为准。
@@ -9,9 +13,8 @@ Session、Alembic 环境和基础测试；12 张业务表将在下一步按数�
 ## 本地运行
 
 ```powershell
+conda activate job-mail-agent
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 uvicorn app.main:app --reload
@@ -21,6 +24,12 @@ uvicorn app.main:app --reload
 
 - API 文档：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/v1/health>
+
+配置 `JOB_MAIL_LLM_API_KEY` 后，可使用脱敏邮件执行一次真实分类与抽取：
+
+```powershell
+python -m app.cli.analyze_fixture ..\tests\fixtures\emails\interview_invitation.json
+```
 
 ## Alembic
 
@@ -36,6 +45,6 @@ MySQL 数据库并在 `.env` 中设置 `JOB_MAIL_DATABASE_URL`。
 ## 测试与检查
 
 ```powershell
-pytest
-ruff check .
+python -m pytest
+python -m ruff check .
 ```

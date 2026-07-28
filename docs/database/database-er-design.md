@@ -1,7 +1,7 @@
 # 求职邮件智能管理系统数据库 ER 设计
 
-> 状态：MVP 精简逻辑模型已确定，物理 DDL 待 Alembic 实现
-> 版本：v1.1
+> 状态：MVP 精简逻辑模型已确定，首批四张表的 Alembic DDL 已实现
+> 版本：v1.2
 > 日期：2026-07-27
 > 数据库：MySQL 8.x / InnoDB / `utf8mb4`
 > 规模：12 张核心表
@@ -180,7 +180,7 @@ UNIQUE(account_id, source_folder, uid_validity, imap_uid)
 索引：
 
 - INDEX(`account_id`, `received_at`)
-- INDEX(`message_id`)；非唯一
+- INDEX(`message_id(191)`)；非唯一前缀索引，完整字段仍用于辅助去重
 - INDEX(`application_id`, `received_at`)
 - INDEX(`archive_status`)
 
@@ -509,6 +509,10 @@ Classification Agent(priority/category/confidence)
 ## 7. Alembic 迁移顺序
 
 ### 001：用户、邮箱和邮件
+
+状态：已实现，迁移版本 `20260727_0001`；已通过 MySQL 离线 DDL、迁移顺序、
+ORM 元数据测试以及本地 MySQL 8 的 `upgrade head`、`current` 和 `check`。
+真实 downgrade 未执行，降级 SQL 和逆依赖顺序已由自动化测试验证。
 
 ```text
 users

@@ -1,1 +1,1 @@
-"""Configuration, logging and application-wide concerns."""
+"""配置、日志与应用级公共能力。"""

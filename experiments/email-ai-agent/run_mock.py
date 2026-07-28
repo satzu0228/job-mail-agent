@@ -1,25 +1,20 @@
-"""Run the Email-AI-Agent LangGraph workflow with local sample emails only.
+"""仅使用本地样例邮件运行 Email-AI-Agent 的 LangGraph 工作流。
 
-This experiment deliberately avoids IMAP and SMTP. It imports the reference
-project in place so that compatibility changes remain small and easy to audit.
+该实验不会调用 IMAP 或 SMTP，并直接导入参考项目，以便将兼容性修改控制在
+最小范围且方便审查。
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
-
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_ROOT = WORKSPACE_ROOT / "references" / "Email-AI-Agent"
 
 if not REFERENCE_ROOT.is_dir():
-    raise SystemExit(
-        "Email-AI-Agent was not found. Expected it at: "
-        f"{REFERENCE_ROOT}"
-    )
+    raise SystemExit(f"未找到 Email-AI-Agent 参考项目，预期路径：{REFERENCE_ROOT}")
 
 sys.path.insert(0, str(REFERENCE_ROOT))
 
@@ -31,23 +26,23 @@ from core.supervisor import supervisor_langgraph  # noqa: E402
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Email-AI-Agent with sample_emails.json (no IMAP/SMTP)."
+        description="使用 sample_emails.json 运行参考项目，不调用 IMAP 或 SMTP。"
     )
     parser.add_argument(
         "--your-name",
         default="求职者",
-        help="Name used in the generated reply signature.",
+        help="生成回复签名时使用的姓名。",
     )
     parser.add_argument(
         "--recipient-name",
         default="招聘负责人",
-        help="Name used in the generated reply greeting.",
+        help="生成回复称呼时使用的收件人姓名。",
     )
     parser.add_argument(
         "--email-index",
         type=int,
         default=0,
-        help="Zero-based index of the sample email to process.",
+        help="待处理样例邮件的索引，从 0 开始。",
     )
     return parser.parse_args()
 
@@ -93,7 +88,11 @@ def main() -> int:
         args.recipient_name,
     )
 
-    result = final_state["current_email"] if isinstance(final_state, dict) else final_state.current_email
+    result = (
+        final_state["current_email"]
+        if isinstance(final_state, dict)
+        else final_state.current_email
+    )
     print("\n=== 处理结果 ===")
     print(f"分类：{result.get('classification', '')}")
     print(f"摘要：{result.get('summary', '')}")

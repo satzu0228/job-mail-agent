@@ -1,0 +1,12 @@
+{
+  "email_id": 1001,
+  "message_id": "<fixture-interview-1001@example.com>",
+  "subject": "星海科技后端开发工程师一面邀请",
+  "sender_name": "招聘专员林女士",
+  "sender_address": "recruiting@example.com",
+  "sent_at": "2026-07-28T09:30:00+08:00",
+  "received_at": "2026-07-28T09:31:00+08:00",
+  "analysis_text": "您好，感谢您申请星海科技后端开发工程师岗位。邀请您于2026年7月31日14:00参加线上一面，会议链接：https://meet.example.com/abc123。请在7月29日18:00前回复确认是否参加。如有问题请联系林女士。",
+  "attachments": [],
+  "user_timezone": "Asia/Shanghai"
+}

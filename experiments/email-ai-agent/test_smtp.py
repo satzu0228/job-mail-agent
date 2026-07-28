@@ -1,11 +1,10 @@
-"""Send one fixed SMTP test message from the configured mailbox to itself."""
+"""使用已配置邮箱向自身发送一封固定的 SMTP 测试邮件。"""
 
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
-
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_ROOT = WORKSPACE_ROOT / "references" / "Email-AI-Agent"
@@ -81,4 +80,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

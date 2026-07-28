@@ -24,12 +24,14 @@
 
 - [开发实施计划](plans/implementation-plan.md)：记录阶段任务、交付物、测试和风险控制。
 
-## 5. 已完成阶段记录
-
-目录：[`phase-1/`](phase-1/)
+## 5. 阶段进展记录
 
 - [第一阶段索引](phase-1/README.md)：参考项目运行、IMAP/SMTP 验证、源码分析、
   已知问题和复用结论。
+- [第二阶段完成记录](phase-2/foundation-progress.md)：MVP、架构边界和正式后端骨架，
+  并保留紧随其后的首批实现证据。
+- [第三阶段进展](phase-3/database-and-api-progress.md)：数据库与基础接口的完成度、
+  开发问题、验证结果和下一步。
 
 ## 文档职责规则
 
@@ -37,4 +39,5 @@
 - 技术选型和重要取舍记录在 `architecture/architecture-decisions.md`，不要散落在计划中。
 - 表、字段、约束和迁移顺序以 `database/database-er-design.md` 为准。
 - 实际完成情况更新到 `plans/implementation-plan.md` 和根目录 `README.md`。
+- 每个阶段只维护一份进展记录，并持续补充问题、原因、处理方式和遗留风险。
 - 实验记录不得写成正式系统已经实现的能力。

@@ -15,9 +15,6 @@ __pycache__/
 *.py[cod]
 *.pyd
 .Python
-.venv/
-venv/
-env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -58,4 +55,3 @@ temp/
 *.sqlite
 *.sqlite3
 reports/generated/
-

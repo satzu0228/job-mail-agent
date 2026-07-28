@@ -1,1 +1,1 @@
-"""Job Mail Agent backend application."""
+"""求职邮件智能管理系统后端应用。"""

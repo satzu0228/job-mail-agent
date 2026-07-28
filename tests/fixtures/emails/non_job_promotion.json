@@ -1,0 +1,12 @@
+{
+  "email_id": 1003,
+  "message_id": "<fixture-promotion-1003@example.com>",
+  "subject": "会员夏日优惠即将结束",
+  "sender_name": "示例商城",
+  "sender_address": "promotion@example.com",
+  "sent_at": "2026-07-28T11:00:00+08:00",
+  "received_at": "2026-07-28T11:01:00+08:00",
+  "analysis_text": "您的会员专享优惠券将在本周到期，登录商城即可查看活动商品。本邮件为促销通知，无需回复。",
+  "attachments": [],
+  "user_timezone": "Asia/Shanghai"
+}

@@ -1,0 +1,12 @@
+{
+  "email_id": 1002,
+  "message_id": "<fixture-rejection-1002@example.com>",
+  "subject": "关于数据分析实习生申请的结果通知",
+  "sender_name": "校园招聘团队",
+  "sender_address": "campus@example.com",
+  "sent_at": "2026-07-28T10:00:00+08:00",
+  "received_at": "2026-07-28T10:02:00+08:00",
+  "analysis_text": "您好，感谢您申请远山公司的数据分析实习生岗位。经过综合评估，我们暂时无法推进您本次申请的后续流程。感谢您的时间，祝您求职顺利。",
+  "attachments": [],
+  "user_timezone": "Asia/Shanghai"
+}

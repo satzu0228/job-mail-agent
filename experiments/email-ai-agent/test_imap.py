@@ -1,7 +1,6 @@
-"""Safely verify IMAP connectivity with the configured test mailbox.
+"""安全验证已配置测试邮箱的 IMAP 连接。
 
-The mailbox is selected read-only and messages are fetched with BODY.PEEK so
-this diagnostic does not intentionally change their read/unread state.
+脚本以只读方式选择邮箱并使用 BODY.PEEK 获取邮件，不会主动改变邮件的已读状态。
 """
 
 from __future__ import annotations
@@ -9,11 +8,9 @@ from __future__ import annotations
 import argparse
 import email
 import imaplib
-import socket
 import sys
 from email.header import decode_header, make_header
 from pathlib import Path
-
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_ROOT = WORKSPACE_ROOT / "references" / "Email-AI-Agent"
@@ -79,7 +76,7 @@ def validate_config() -> None:
 
 
 def identify_client(client: imaplib.IMAP4_SSL) -> None:
-    """Send the RFC 2971 client ID required by NetEase IMAP servers."""
+    """发送网易 IMAP 服务要求的 RFC 2971 客户端标识。"""
     imaplib.Commands.setdefault("ID", ("NONAUTH", "AUTH", "SELECTED"))
     status, data = client._simple_command(
         "ID",
@@ -171,7 +168,7 @@ def main() -> int:
     except imaplib.IMAP4.error as exc:
         print(f"IMAP 登录或协议错误：{exc}", file=sys.stderr)
         return 1
-    except (OSError, ValueError, socket.timeout, TimeoutError) as exc:
+    except (OSError, ValueError, TimeoutError) as exc:
         print(f"IMAP 连接错误：{exc}", file=sys.stderr)
         return 1
     finally:
