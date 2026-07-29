@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.schemas import (
@@ -11,7 +12,7 @@ from app.application.schemas import (
     TaskCreate,
     TaskUpdate,
 )
-from app.domain.enums import ApplicationSource
+from app.domain.enums import ApplicationSource, ReplyDraftStatus
 from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.task import Task
@@ -93,6 +94,15 @@ class BusinessCrudService:
     def update_draft(self, draft_id: int, data: ReplyDraftUpdate) -> ReplyDraft:
         with self._session.begin():
             draft = self.drafts.get(draft_id, for_update=True)
+            if draft.status is not ReplyDraftStatus.PENDING:
+                raise VersionConflictError("只有待审核的最新回复草稿可以修改")
+            latest = self._session.scalar(
+                select(func.max(ReplyDraft.version)).where(
+                    ReplyDraft.email_id == draft.email_id
+                )
+            )
+            if latest != draft.version:
+                raise VersionConflictError("旧版本回复草稿不能修改")
             draft.reviewed_body = data.reviewed_body
             self._session.flush()
             return draft

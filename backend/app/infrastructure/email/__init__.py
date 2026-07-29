@@ -5,14 +5,32 @@ from app.infrastructure.email.client import (
     ImapMailboxClient,
     RemoteEmail,
     SmtpConnectionTester,
+    SmtpDeliveryFailedError,
+    SmtpDeliveryUnknownError,
+    SmtpMailer,
+)
+from app.infrastructure.email.formatter import (
+    EmailFormattingError,
+    build_message,
+    format_reply_body,
+    recipient,
+    reply_subject,
 )
 from app.infrastructure.email.parser import ParsedEmail, parse_email
 
 __all__ = [
     "EmailConnectionError",
+    "EmailFormattingError",
     "ImapMailboxClient",
     "ParsedEmail",
     "RemoteEmail",
     "SmtpConnectionTester",
+    "SmtpDeliveryFailedError",
+    "SmtpDeliveryUnknownError",
+    "SmtpMailer",
+    "build_message",
+    "format_reply_body",
     "parse_email",
+    "recipient",
+    "reply_subject",
 ]

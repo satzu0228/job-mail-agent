@@ -6,6 +6,7 @@ import smtplib
 import ssl
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 
 from app.domain.enums import TransportSecurity
@@ -21,6 +22,14 @@ _NETEASE_CLIENT_ID = (
 
 class EmailConnectionError(RuntimeError):
     """邮箱服务器连接或认证失败，异常文本不得包含凭据。"""
+
+
+class SmtpDeliveryFailedError(RuntimeError):
+    """SMTP 明确拒绝发送，服务端未接受邮件。"""
+
+
+class SmtpDeliveryUnknownError(RuntimeError):
+    """SMTP 会话在提交期间中断，无法确认服务端是否已接受邮件。"""
 
 
 @dataclass(frozen=True)
@@ -217,3 +226,65 @@ class SmtpConnectionTester:
                     client.quit()
                 except (smtplib.SMTPException, OSError):
                     client.close()
+
+
+class SmtpMailer:
+    """只传输已完成格式化的 MIME 邮件，不修改主题或正文。"""
+
+    def __init__(self, timeout_seconds: float) -> None:
+        self._timeout_seconds = timeout_seconds
+
+    def send(
+        self,
+        account: EmailAccount,
+        credential: str,
+        message: EmailMessage,
+    ) -> str | None:
+        client: smtplib.SMTP | None = None
+        submitted = False
+        try:
+            client = self._connect(account)
+            client.login(account.email_address, credential)
+            submitted = True
+            refused = client.send_message(message)
+            if refused:
+                raise SmtpDeliveryFailedError("SMTP 拒绝了一个或多个收件人")
+            return message.get("Message-ID")
+        except SmtpDeliveryFailedError:
+            raise
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise SmtpDeliveryFailedError("SMTP 拒绝了全部收件人") from exc
+        except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused) as exc:
+            raise SmtpDeliveryFailedError("SMTP 明确拒绝邮件") from exc
+        except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
+            if submitted:
+                raise SmtpDeliveryUnknownError("SMTP 发送结果无法确认") from exc
+            raise SmtpDeliveryFailedError("SMTP 连接或认证失败") from exc
+        except smtplib.SMTPException as exc:
+            if submitted:
+                raise SmtpDeliveryUnknownError("SMTP 发送结果无法确认") from exc
+            raise SmtpDeliveryFailedError("SMTP 连接或认证失败") from exc
+        finally:
+            if client is not None:
+                try:
+                    client.quit()
+                except (smtplib.SMTPException, OSError):
+                    client.close()
+
+    def _connect(self, account: EmailAccount) -> smtplib.SMTP:
+        if account.smtp_security == TransportSecurity.SSL:
+            return smtplib.SMTP_SSL(
+                account.smtp_host,
+                account.smtp_port,
+                timeout=self._timeout_seconds,
+                context=ssl.create_default_context(),
+            )
+        client = smtplib.SMTP(
+            account.smtp_host,
+            account.smtp_port,
+            timeout=self._timeout_seconds,
+        )
+        client.ehlo()
+        client.starttls(context=ssl.create_default_context())
+        client.ehlo()
+        return client

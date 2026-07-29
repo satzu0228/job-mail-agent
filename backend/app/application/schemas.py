@@ -393,3 +393,30 @@ class ReplyDraftRead(UtcResponseSchema):
     status: ReplyDraftStatus
     created_at: datetime
     updated_at: datetime
+
+
+class ReplyGenerationRequest(ApiSchema):
+    workflow_run_id: str | None = Field(default=None, min_length=36, max_length=36)
+
+
+class ReplyGenerationResponse(ApiSchema):
+    should_reply: bool
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+    draft: ReplyDraftRead | None = None
+    review_task: ReviewTaskRead | None = None
+
+
+class ReplySendRequest(ApiSchema):
+    draft_version: int = Field(gt=0)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
+
+
+class ReplySendResponse(ApiSchema):
+    draft: ReplyDraftRead
+    review_task: ReviewTaskRead
+    execution: ActionExecutionRead

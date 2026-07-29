@@ -40,6 +40,8 @@
   Application Agent、申请状态机、审核与幂等执行边界。
 - [第七阶段完成记录](phase-7/langgraph-workflow-progress.md)：强类型 LangGraph
   工作流、加密 checkpoint、两段中断恢复、运行轨迹与真实 MySQL 验收。
+- [第八阶段完成记录](phase-8/reply-and-smtp-progress.md)：Reply Agent、草稿审核、
+  确定性格式化、三段工作流中断与 SMTP 幂等发送边界。
 
 ## 文档职责规则
 

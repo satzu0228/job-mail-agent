@@ -27,7 +27,9 @@ from app.application.email_analysis import (
     PersistEmailAnalysis,
     prepare_email,
 )
+from app.application.reply import ReplyGenerationService, ReplyRunner
 from app.application.schemas import (
+    ReplyGenerationRequest,
     ReviewDecision,
     ReviewDecisionResponse,
     WorkflowRunRead,
@@ -66,6 +68,7 @@ class DatabaseWorkflowOperations:
         classification_agent: ClassificationRunner,
         extraction_agent: ExtractionRunner,
         application_agent: ApplicationRunner,
+        reply_agent: ReplyRunner,
         *,
         model_provider: str,
         model_name: str,
@@ -75,6 +78,7 @@ class DatabaseWorkflowOperations:
         self._classification_agent = classification_agent
         self._extraction_agent = extraction_agent
         self._application_agent = application_agent
+        self._reply_agent = reply_agent
         self._model_provider = model_provider
         self._model_name = model_name
 
@@ -243,11 +247,20 @@ class DatabaseWorkflowOperations:
             service = ReviewTaskService(session, self._user_id)
             task = service.get(review_task_id)
             status = task.status
+            action_type = task.action_type
+            draft_id = task.draft_id
             session.rollback()
             if status is ReviewTaskStatus.REJECTED:
                 return ReviewExecutionOutcome(
                     review_task_id=review_task_id,
+                    action_type=action_type.value,
                     rejected=True,
+                )
+            if action_type.value == "SEND_REPLY":
+                return ReviewExecutionOutcome(
+                    review_task_id=review_task_id,
+                    action_type=action_type.value,
+                    result={"draft_id": draft_id},
                 )
             response = service.execute_decided(
                 review_task_id,
@@ -255,6 +268,7 @@ class DatabaseWorkflowOperations:
             )
             return ReviewExecutionOutcome(
                 review_task_id=review_task_id,
+                action_type=action_type.value,
                 follow_up_review_task_id=(
                     response.follow_up_review_task.id
                     if response.follow_up_review_task
@@ -262,6 +276,25 @@ class DatabaseWorkflowOperations:
                 ),
                 result=response.execution.result if response.execution else None,
             )
+
+    def generate_reply(
+        self,
+        *,
+        email_id: int,
+        workflow_run_id: str,
+    ) -> tuple[int | None, str | None]:
+        with self._session_factory() as session:
+            response = ReplyGenerationService(
+                session,
+                self._user_id,
+                self._reply_agent,
+            ).generate(
+                email_id,
+                ReplyGenerationRequest(workflow_run_id=workflow_run_id),
+            )
+        if response.draft is None or response.review_task is None:
+            return None, None
+        return response.draft.id, response.review_task.id
 
     def mark_waiting(self, workflow_run_id: str, review_task_id: str) -> None:
         with self._session_factory() as session, session.begin():

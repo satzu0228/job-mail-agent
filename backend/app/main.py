@@ -12,6 +12,10 @@ from app.application.email_analysis import (
     EmailNotReadyForAnalysisError,
     NonJobEmailExtractionError,
 )
+from app.application.reply import (
+    ReplyGenerationUnavailableError,
+    ReplyModelExecutionError,
+)
 from app.application.workflow import WorkflowCheckpointUnavailableError
 from app.core.config import get_settings
 from app.infrastructure.checkpoint import CheckpointConfigurationError
@@ -85,9 +89,14 @@ def create_app() -> FastAPI:
 
     @application.exception_handler(EmailModelExecutionError)
     @application.exception_handler(ApplicationModelExecutionError)
+    @application.exception_handler(ReplyModelExecutionError)
     def model_execution_handler(
         request: Request,
-        exc: EmailModelExecutionError | ApplicationModelExecutionError,
+        exc: (
+            EmailModelExecutionError
+            | ApplicationModelExecutionError
+            | ReplyModelExecutionError
+        ),
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -95,9 +104,10 @@ def create_app() -> FastAPI:
         )
 
     @application.exception_handler(ApplicationAnalysisUnavailableError)
+    @application.exception_handler(ReplyGenerationUnavailableError)
     def application_analysis_conflict_handler(
         request: Request,
-        exc: ApplicationAnalysisUnavailableError,
+        exc: ApplicationAnalysisUnavailableError | ReplyGenerationUnavailableError,
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,

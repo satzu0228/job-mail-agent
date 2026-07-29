@@ -1,6 +1,14 @@
+from email.message import EmailMessage
+
+import pytest
+
 from app.domain.enums import TransportSecurity
 from app.infrastructure.db.models.email_account import EmailAccount
-from app.infrastructure.email.client import ImapMailboxClient
+from app.infrastructure.email.client import (
+    ImapMailboxClient,
+    SmtpDeliveryUnknownError,
+    SmtpMailer,
+)
 
 
 class FakeImap:
@@ -88,3 +96,61 @@ def test_uidvalidity_change_resets_cursor_and_fetch_is_read_only() -> None:
     assert fake.readonly is True
     assert ("2", "(BODY.PEEK[] INTERNALDATE)") in fake.fetch_queries
     assert messages[0].received_at.isoformat() == "2026-07-28T02:00:00"
+
+
+class FakeSmtp:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.sent = 0
+
+    def login(self, email_address: str, credential: str) -> None:
+        assert credential == "secret-not-logged"
+
+    def send_message(self, message: EmailMessage) -> dict[str, object]:
+        self.sent += 1
+        if self.error:
+            raise self.error
+        return {}
+
+    def quit(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def test_smtp_mailer_transports_message_without_reformatting() -> None:
+    fake = FakeSmtp()
+    mailer = SmtpMailer(timeout_seconds=5)
+    mailer._connect = lambda account: fake  # type: ignore[method-assign]
+    message = EmailMessage()
+    message["From"] = "candidate@example.com"
+    message["To"] = "hr@example.com"
+    message["Subject"] = "Re: 面试邀请"
+    message["Message-ID"] = "<fixed@example.com>"
+    message.set_content("已经确定格式的正文")
+
+    reference = mailer.send(
+        _account(),
+        "secret-not-logged",
+        message,
+    )
+
+    assert reference == "<fixed@example.com>"
+    assert fake.sent == 1
+    assert message.get_content().strip() == "已经确定格式的正文"
+
+
+def test_smtp_disconnect_during_submission_is_unknown() -> None:
+    import smtplib
+
+    fake = FakeSmtp(smtplib.SMTPServerDisconnected("connection lost"))
+    mailer = SmtpMailer(timeout_seconds=5)
+    mailer._connect = lambda account: fake  # type: ignore[method-assign]
+    message = EmailMessage()
+    message["From"] = "candidate@example.com"
+    message["To"] = "hr@example.com"
+    message.set_content("正文")
+
+    with pytest.raises(SmtpDeliveryUnknownError):
+        mailer.send(_account(), "secret-not-logged", message)

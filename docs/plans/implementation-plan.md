@@ -2,7 +2,8 @@
 
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
-> 当前进度：前五阶段已完成；单封邮件 classify/extract/analyze API、非求职短路、版本化持久化及真实 DeepSeek/MySQL 联调通过，下一步进入求职记录与状态管理
+> 当前进度：前八阶段已完成；四 Agent、三段可恢复审核、回复草稿和 SMTP 幂等
+> Executor 已实现，下一步进入第九阶段 Vue 3 前端开发
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论
@@ -573,7 +574,11 @@ END
 
 ---
 
-### 第八阶段：实现回复生成、审核与发送
+### 第八阶段：实现回复生成、审核与发送（已完成）
+
+> 阶段状态：已完成（2026-07-29）。实现证据见
+> `docs/phase-8/reply-and-smtp-progress.md`；真实 DeepSeek、163 IMAP/SMTP、MySQL
+> 三段审核闭环已通过。
 
 #### 阶段目标
 
@@ -599,7 +604,7 @@ POST /api/emails/{id}/generate-reply
 模型生成内容先保存到：
 
 ```text
-reply_drafts.generated_content
+reply_drafts.generated_body
 ```
 
 用户可以：
@@ -612,13 +617,13 @@ reply_drafts.generated_content
 修改后的内容保存到：
 
 ```text
-reply_drafts.reviewed_content
+reply_drafts.reviewed_body
 ```
 
 发送接口：
 
 ```http
-POST /api/drafts/{id}/send
+POST /api/v1/reply-drafts/{id}/send
 ```
 
 发送流程：

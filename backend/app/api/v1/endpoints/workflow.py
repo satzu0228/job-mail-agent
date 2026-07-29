@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents.application.agent import ApplicationAgent
 from app.agents.classification.agent import ClassificationAgent
 from app.agents.extraction.agent import ExtractionAgent
+from app.agents.reply import ReplyAgent
 from app.application.application_management import ReviewTaskService
 from app.application.schemas import (
     ReviewDecision,
@@ -50,6 +51,7 @@ def _workflow_service(
     classification = ClassificationAgent.from_model(model)
     extraction = ExtractionAgent.from_model(model)
     application = ApplicationAgent.from_model(model)
+    reply = ReplyAgent.from_model(model)
     path = settings.checkpoint_path
     if not path.is_absolute():
         path = BACKEND_DIR / path
@@ -60,6 +62,7 @@ def _workflow_service(
             classification,
             extraction,
             application,
+            reply,
             model_provider=settings.llm_provider,
             model_name=settings.llm_model,
         )
@@ -74,6 +77,7 @@ def _workflow_service(
                 "classification": classification.prompt_version,
                 "extraction": extraction.prompt_version,
                 "application": application.prompt_version,
+                "reply": reply.prompt_version,
             },
         )
 

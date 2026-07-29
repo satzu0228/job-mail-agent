@@ -319,6 +319,8 @@ Classification Agent
           ↓
     Application Agent
           ↓
+    申请关联/阶段 Human-in-the-Loop 与确定性 Executor
+          ↓
     Orchestrator 根据 should_reply 决定
           ├── Reply Agent（需要回复）
           └── 跳过回复（无需回复）
@@ -330,10 +332,9 @@ Classification Agent
                           ↓
                     用户接受/修改/拒绝
                           ↓
-                    Action Planner
+                    保存获批草稿
                           ↓
-                    确定性 Executor
-              数据库更新 / SMTP / 日程创建
+              图外确定性 Executor（SMTP / 日程 / 归档）
 ```
 
 ### 7.1 可并行部分

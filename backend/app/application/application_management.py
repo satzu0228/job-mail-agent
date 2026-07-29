@@ -32,6 +32,7 @@ from app.domain.enums import (
     DecisionSource,
     ExecutionStatus,
     ExecutorType,
+    ReplyDraftStatus,
     ReviewActionType,
     ReviewTaskStatus,
     RiskLevel,
@@ -42,6 +43,7 @@ from app.infrastructure.db.models.application_event import ApplicationEvent
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.job_application import JobApplication
+from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
 from app.infrastructure.db.models.workflow_run import WorkflowRun
 from app.infrastructure.db.repositories import (
@@ -446,6 +448,8 @@ class ReviewTaskService:
             return self._existing_response(recorded.task)
         if recorded.task.status is ReviewTaskStatus.REJECTED:
             return ReviewDecisionResponse(review_task=recorded.task)
+        if recorded.task.action_type is ReviewActionType.SEND_REPLY:
+            return self._existing_response(recorded.task)
         return self.execute_decided(task_id, update_workflow=True)
 
     def record_decision(
@@ -477,6 +481,7 @@ class ReviewTaskService:
             task.reviewed_at = now
             if not decision.approve:
                 task.status = ReviewTaskStatus.REJECTED
+                self._update_reply_draft_after_decision(task, approved=False)
                 if update_workflow:
                     self._update_workflow_after_decision(task, follow_up=None)
                 self._session.flush()
@@ -487,6 +492,7 @@ class ReviewTaskService:
                 payload.update(decision.reviewed_payload)
             self._validate_approved_payload(task, payload)
             task.status = ReviewTaskStatus.APPROVED
+            self._update_reply_draft_after_decision(task, approved=True)
             self._session.flush()
             return RecordedReviewDecision(task=task, should_resume=True)
 
@@ -579,8 +585,60 @@ class ReviewTaskService:
             validation = validate_stage_transition(application.current_stage, proposed)
             if not validation.can_apply:
                 raise ResourceConflictError(validation.reason)
+        elif task.action_type is ReviewActionType.SEND_REPLY:
+            unexpected = set(task.reviewed_payload or {}) - {"body"}
+            if unexpected:
+                raise ResourceConflictError("回复审核只允许修改正文")
+            if task.draft_id is None:
+                raise ResourceConflictError("发送审核任务缺少回复草稿")
+            draft = self._session.get(ReplyDraft, task.draft_id)
+            if draft is None or draft.email_id != task.source_email_id:
+                raise ResourceConflictError("发送审核任务引用的回复草稿无效")
+            latest = self._session.scalar(
+                select(func.max(ReplyDraft.version)).where(
+                    ReplyDraft.email_id == draft.email_id
+                )
+            )
+            if latest != draft.version or task.resource_version != draft.version:
+                raise VersionConflictError("旧版本回复草稿不能批准")
+            if draft.status is not ReplyDraftStatus.PENDING:
+                raise ResourceConflictError(
+                    f"回复草稿当前状态 {draft.status.value} 不允许批准"
+                )
+            body = payload.get("body")
+            if not isinstance(body, str) or not body.strip():
+                raise ResourceConflictError("批准回复时正文不能为空")
+            if len(body) > 20_000:
+                raise ResourceConflictError("回复正文超过长度限制")
         else:
             raise ResourceConflictError("当前阶段不支持执行该审核动作")
+
+    def _update_reply_draft_after_decision(
+        self,
+        task: ReviewTask,
+        *,
+        approved: bool,
+    ) -> None:
+        if task.action_type is not ReviewActionType.SEND_REPLY or task.draft_id is None:
+            return
+        draft = self._session.get(ReplyDraft, task.draft_id)
+        if draft is None:
+            raise ResourceConflictError("发送审核任务引用的回复草稿不存在")
+        if not approved:
+            draft.status = ReplyDraftStatus.REJECTED
+            return
+        body = draft.reviewed_body or draft.generated_body
+        if task.reviewed_payload and "body" in task.reviewed_payload:
+            reviewed = task.reviewed_payload["body"]
+            if not isinstance(reviewed, str) or not reviewed.strip():
+                raise ResourceConflictError("人工修改后的回复正文不能为空")
+            body = reviewed.strip()
+        if body != draft.generated_body:
+            draft.reviewed_body = body
+            draft.status = ReplyDraftStatus.MODIFIED_AND_APPROVED
+        else:
+            draft.reviewed_body = None
+            draft.status = ReplyDraftStatus.APPROVED
 
     def _execute(
         self,
@@ -777,7 +835,10 @@ class ReviewTaskService:
         workflow.current_node = None
         workflow.status = (
             WorkflowRunStatus.SUCCEEDED
-            if task.status is ReviewTaskStatus.SUCCEEDED
+            if task.status in {
+                ReviewTaskStatus.APPROVED,
+                ReviewTaskStatus.SUCCEEDED,
+            }
             else WorkflowRunStatus.CANCELLED
         )
         workflow.finished_at = _utc_now()

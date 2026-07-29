@@ -27,6 +27,8 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/tasks/{task_id}",
         "/api/v1/reply-drafts",
         "/api/v1/reply-drafts/{draft_id}",
+        "/api/v1/reply-drafts/{draft_id}/send",
+        "/api/v1/emails/{email_id}/generate-reply",
     }
     assert expected_paths <= paths.keys()
 
@@ -44,7 +46,8 @@ def test_basic_api_does_not_expose_critical_state_or_send_actions(
     assert "current_stage" not in application_update
     assert "status" not in application_update
     assert set(draft_update) == {"reviewed_body"}
-    assert not any("send" in path for path in paths)
+    send_paths = {path for path in paths if "send" in path}
+    assert send_paths == {"/api/v1/reply-drafts/{draft_id}/send"}
     account_read = components["EmailAccountRead"]["properties"]
     assert "credential_ref" not in account_read
     assert "email_address" not in account_read

@@ -16,7 +16,7 @@ from app.workflows.state import (
     WorkflowState,
 )
 
-GRAPH_VERSION = "job-mail-workflow.v1"
+GRAPH_VERSION = "job-mail-workflow.v2"
 
 
 class WorkflowOperations(Protocol):
@@ -51,6 +51,13 @@ class WorkflowOperations(Protocol):
         workflow_run_id: str,
     ) -> tuple[int, list[ApplicationCandidate], ApplicationAgentOutput, str]: ...
 
+    def generate_reply(
+        self,
+        *,
+        email_id: int,
+        workflow_run_id: str,
+    ) -> tuple[int | None, str | None]: ...
+
     def execute_review(self, review_task_id: str) -> ReviewExecutionOutcome: ...
 
     def mark_waiting(self, workflow_run_id: str, review_task_id: str) -> None: ...
@@ -79,6 +86,7 @@ class JobMailGraph:
         builder.add_node("validate_results", self._validate_results)
         builder.add_node("persist_analysis", self._persist_analysis)
         builder.add_node("match_application", self._match_application)
+        builder.add_node("generate_reply", self._generate_reply)
         builder.add_node("human_review", self._human_review)
         builder.add_node("execute_review", self._execute_review)
         builder.add_node("finalize", self._finalize)
@@ -132,7 +140,22 @@ class JobMailGraph:
         builder.add_conditional_edges(
             "execute_review",
             self._route_after_review,
-            {"review": "human_review", "finalize": "finalize", "fail": "fail"},
+            {
+                "review": "human_review",
+                "reply": "generate_reply",
+                "finalize": "finalize",
+                "fail": "fail",
+            },
+        )
+        builder.add_conditional_edges(
+            "generate_reply",
+            self._route_after_reply,
+            {
+                "retry": "generate_reply",
+                "review": "human_review",
+                "finalize": "finalize",
+                "fail": "fail",
+            },
         )
         builder.add_edge("finalize", END)
         builder.add_edge("fail", END)
@@ -260,6 +283,32 @@ class JobMailGraph:
                 raise
             return self._failure("human_review", exc)
 
+    def _generate_reply(self, state: WorkflowState) -> dict[str, Any]:
+        try:
+            draft_id, review_task_id = self._operations.generate_reply(
+                email_id=state.email_id,
+                workflow_run_id=state.workflow_run_id,
+            )
+            if draft_id is None or review_task_id is None:
+                return {
+                    "reply_draft_id": None,
+                    "current_review_task_id": None,
+                    "final_status": WorkflowRunStatus.SUCCEEDED.value,
+                    "retry_node": None,
+                }
+            return {
+                "reply_draft_id": draft_id,
+                "current_review_task_id": review_task_id,
+                "retry_node": None,
+            }
+        except Exception as exc:
+            return self._retry_or_failure(
+                state,
+                retry_key="reply",
+                node="generate_reply",
+                exc=exc,
+            )
+
     def _execute_review(self, state: WorkflowState) -> dict[str, Any]:
         task_id = state.current_review_task_id
         if not task_id:
@@ -272,14 +321,21 @@ class JobMailGraph:
                     "completed_review_task_ids": completed,
                     "current_review_task_id": outcome.follow_up_review_task_id,
                 }
+            if outcome.rejected:
+                return {
+                    "completed_review_task_ids": completed,
+                    "current_review_task_id": None,
+                    "final_status": WorkflowRunStatus.CANCELLED.value,
+                }
+            if outcome.action_type == "SEND_REPLY":
+                return {
+                    "completed_review_task_ids": completed,
+                    "current_review_task_id": None,
+                    "final_status": WorkflowRunStatus.SUCCEEDED.value,
+                }
             return {
                 "completed_review_task_ids": completed,
                 "current_review_task_id": None,
-                "final_status": (
-                    WorkflowRunStatus.CANCELLED
-                    if outcome.rejected
-                    else WorkflowRunStatus.SUCCEEDED
-                ).value,
             }
         except Exception as exc:
             return self._failure("execute_review", exc)
@@ -334,6 +390,20 @@ class JobMailGraph:
 
     @staticmethod
     def _route_after_review(state: WorkflowState) -> str:
+        if state.error_code:
+            return "fail"
+        if state.current_review_task_id:
+            return "review"
+        if state.final_status:
+            return "finalize"
+        if state.classification and not state.classification.should_reply:
+            return "finalize"
+        return "reply"
+
+    @staticmethod
+    def _route_after_reply(state: WorkflowState) -> str:
+        if state.retry_node == "generate_reply":
+            return "retry"
         if state.error_code:
             return "fail"
         if state.current_review_task_id:

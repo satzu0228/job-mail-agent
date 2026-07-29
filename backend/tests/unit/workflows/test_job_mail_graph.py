@@ -111,6 +111,10 @@ class FakeOperations:
         assert outcome.review_task_id == review_task_id
         return outcome
 
+    def generate_reply(self, **kwargs: object) -> tuple[int | None, str | None]:
+        self.calls.append("reply")
+        return None, None
+
     def mark_waiting(self, workflow_run_id: str, review_task_id: str) -> None:
         self.waiting.append(review_task_id)
 
@@ -166,7 +170,11 @@ def test_job_email_interrupts_twice_and_resumes_from_same_thread() -> None:
         config=config,
     )
     assert final["final_status"] == WorkflowRunStatus.SUCCEEDED.value
-    assert operations.calls[-2:] == ["execute:review-1", "execute:review-2"]
+    assert operations.calls[-3:] == [
+        "execute:review-1",
+        "execute:review-2",
+        "reply",
+    ]
     assert operations.final_status is WorkflowRunStatus.SUCCEEDED
 
 
@@ -250,3 +258,38 @@ def test_rejected_review_cancels_workflow_without_executor_follow_up() -> None:
 
     assert final["final_status"] == WorkflowRunStatus.CANCELLED.value
     assert operations.final_status is WorkflowRunStatus.CANCELLED
+
+
+def test_reply_draft_adds_third_interrupt_without_sending_in_graph() -> None:
+    class ReplyOperations(FakeOperations):
+        def generate_reply(self, **kwargs: object) -> tuple[int, str]:
+            self.calls.append("reply")
+            return 31, "review-reply"
+
+    operations = ReplyOperations()
+    operations.review_outcomes.append(
+        ReviewExecutionOutcome(
+            review_task_id="review-reply",
+            action_type="SEND_REPLY",
+        )
+    )
+    graph = JobMailGraph(operations).compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "reply-thread"}}
+
+    graph.invoke(_initial().model_dump(mode="json"), config=config)
+    graph.invoke(Command(resume={"review_task_id": "review-1"}), config=config)
+    third = graph.invoke(
+        Command(resume={"review_task_id": "review-2"}),
+        config=config,
+    )
+
+    assert third["reply_draft_id"] == 31
+    assert third["current_review_task_id"] == "review-reply"
+    assert operations.waiting[-1] == "review-reply"
+
+    final = graph.invoke(
+        Command(resume={"review_task_id": "review-reply"}),
+        config=config,
+    )
+    assert final["final_status"] == WorkflowRunStatus.SUCCEEDED.value
+    assert "execute:review-reply" in operations.calls

@@ -10,8 +10,10 @@ Session、Alembic 环境和基础测试，并完成 12 张核心业务表与三�
 幂等入库已经实现。单封邮件分类、抽取、统一分析 API 和分析结果版本化持久化
 也已完成。第六阶段已增加确定性申请候选评分、Application Agent、申请状态机和
 人工审核执行链路；模型建议不会直接关联申请或修改关键阶段。第七阶段已增加
-LangGraph 强类型工作流、Validation Node、SQLite checkpoint、两段人工中断恢复、
-运行轨迹以及工作流启动和查询 API。
+LangGraph 强类型工作流、Validation Node、SQLite checkpoint、申请处理的两段人工
+中断恢复、运行轨迹以及工作流启动和查询 API。第八阶段已增加 Reply Agent、确定性邮件
+Formatter、草稿高风险审核、第三段可恢复中断和 SMTP 幂等 Executor；Agent 与
+LangGraph 均不能直接发送邮件。
 
 数据库字段和迁移顺序以
 [`../docs/database/database-er-design.md`](../docs/database/database-er-design.md) 为准。
@@ -42,6 +44,8 @@ uvicorn app.main:app --reload
 - 审核任务：<http://127.0.0.1:8000/api/v1/review-tasks>
 - 任务日程：<http://127.0.0.1:8000/api/v1/tasks>
 - 回复草稿：<http://127.0.0.1:8000/api/v1/reply-drafts>
+- 生成回复：`POST /api/v1/emails/{id}/generate-reply`
+- 发送已审核草稿：`POST /api/v1/reply-drafts/{id}/send`
 
 配置 `JOB_MAIL_LLM_API_KEY` 后，可使用脱敏邮件执行一次真实分类与抽取：
 

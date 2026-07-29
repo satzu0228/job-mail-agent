@@ -29,6 +29,7 @@ class WorkflowState(BaseModel):
     analysis_id: int | None = None
     application_candidates: list[ApplicationCandidate] = Field(default_factory=list)
     application_suggestion: ApplicationAgentOutput | None = None
+    reply_draft_id: int | None = None
     current_review_task_id: str | None = None
     completed_review_task_ids: list[str] = Field(default_factory=list)
     retry_counts: dict[str, int] = Field(default_factory=dict)
@@ -51,6 +52,7 @@ class ReviewExecutionOutcome(BaseModel):
     """确定性审核 Executor 返回给图的结果。"""
 
     review_task_id: str
+    action_type: str = "APPLICATION"
     rejected: bool = False
     follow_up_review_task_id: str | None = None
     result: dict[str, Any] | None = None
