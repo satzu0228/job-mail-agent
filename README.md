@@ -2,16 +2,15 @@
 
 毕业设计：**基于大语言模型与多智能体协作的求职邮件智能管理系统设计与实现**。
 
-前三阶段已经完成：MVP 与架构边界已冻结，12 张核心业务表、三批 Alembic 迁移、
-分析结果版本化持久化，以及邮件、求职记录、任务和回复草稿基础 API 已在本地
-MySQL 8 验证。第四阶段的邮箱账户配置、IMAP/SMTP 连接测试、INBOX 有界增量同步、
-MIME/HTML 安全解析和幂等入库已实现，并已通过真实 163 邮箱与 MySQL 验收。
-第五阶段的 Classification/Extraction Agent、单封邮件 API、非求职短路和分析结果
-版本化持久化也已完成，并通过脱敏 Fixture、真实 DeepSeek 和 MySQL 联调。
+当前前七阶段已经完成：MVP 与架构边界、12 张核心业务表、三批 Alembic 迁移、
+邮件同步与安全解析、Classification/Extraction/Application Agent、分析结果版本化、
+申请匹配、状态机和两段人工审核均已实现。第七阶段进一步将这些能力整合为
+LangGraph 工作流，支持非求职短路、受限重试、AES 加密 SQLite checkpoint、
+`interrupt`/`resume` 和应用重建后的恢复。
 项目背景和长期协作约定见
 [AGENTS.md](AGENTS.md)。
 
-当前前五阶段已完成，下一步进入第六阶段“求职记录和状态管理”。
+下一步进入第八阶段“回复生成、审核与发送”。
 
 全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 

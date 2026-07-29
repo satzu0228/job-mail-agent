@@ -4,6 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.agents.application.agent import ApplicationAgent
+from app.api.v1.endpoints.workflow import (
+    ReviewDecisionCoordinator,
+    review_decision_service,
+)
 from app.application.application_management import (
     ApplicationManagementService,
     ReviewTaskService,
@@ -49,6 +53,10 @@ ManagementDependency = Annotated[
     Depends(management_service),
 ]
 ReviewDependency = Annotated[ReviewTaskService, Depends(review_service)]
+ReviewDecisionDependency = Annotated[
+    ReviewDecisionCoordinator,
+    Depends(review_decision_service),
+]
 
 
 @router.post(
@@ -99,6 +107,6 @@ def get_review_task(
 def decide_review_task(
     task_id: str,
     payload: ReviewDecision,
-    use_case: ReviewDependency,
+    use_case: ReviewDecisionDependency,
 ) -> ReviewDecisionResponse:
     return use_case.decide(task_id, payload)

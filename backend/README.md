@@ -9,7 +9,9 @@ Session、Alembic 环境和基础测试，并完成 12 张核心业务表与三�
 邮箱账户配置、IMAP/SMTP 连接测试、INBOX 有界增量同步、MIME/HTML 安全解析及
 幂等入库已经实现。单封邮件分类、抽取、统一分析 API 和分析结果版本化持久化
 也已完成。第六阶段已增加确定性申请候选评分、Application Agent、申请状态机和
-人工审核执行链路；模型建议不会直接关联申请或修改关键阶段。
+人工审核执行链路；模型建议不会直接关联申请或修改关键阶段。第七阶段已增加
+LangGraph 强类型工作流、Validation Node、SQLite checkpoint、两段人工中断恢复、
+运行轨迹以及工作流启动和查询 API。
 
 数据库字段和迁移顺序以
 [`../docs/database/database-er-design.md`](../docs/database/database-er-design.md) 为准。
@@ -34,6 +36,8 @@ uvicorn app.main:app --reload
 - 单封抽取：`POST /api/v1/emails/{id}/extract`
 - 统一分析：`POST /api/v1/emails/{id}/analyze`
 - 申请匹配：`POST /api/v1/emails/{id}/match-application`
+- 启动工作流：`POST /api/v1/emails/{id}/workflow-runs`
+- 查询工作流：`GET /api/v1/workflow-runs/{run_id}`
 - 求职记录：<http://127.0.0.1:8000/api/v1/job-applications>
 - 审核任务：<http://127.0.0.1:8000/api/v1/review-tasks>
 - 任务日程：<http://127.0.0.1:8000/api/v1/tasks>
@@ -44,6 +48,15 @@ uvicorn app.main:app --reload
 ```powershell
 python -m app.cli.analyze_fixture ..\tests\fixtures\emails\interview_invitation.json
 ```
+
+启动第七阶段工作流前还必须配置 checkpoint AES 密钥。密钥为 16、24 或 32 字节，
+在环境变量中使用十六进制表示；例如生成 32 字节随机密钥：
+
+```powershell
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+将输出写入本地 `.env` 的 `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY`，不得提交真实值。
 
 邮箱账户的 `credential_ref` 只保存环境变量名，例如
 `JOB_MAIL_EMAIL_CREDENTIAL_TEST_163`。授权码通过进程环境变量或本地 `.env`

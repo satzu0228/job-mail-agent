@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     )
     db_pool_recycle: int = Field(default=1800, ge=1)
     checkpoint_path: Path = Path("runtime/checkpoints.sqlite")
+    checkpoint_encryption_key: SecretStr | None = None
     email_connect_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     email_sync_limit: int = Field(default=50, ge=1, le=200)
     email_max_message_bytes: int = Field(

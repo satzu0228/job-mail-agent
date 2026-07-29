@@ -500,6 +500,9 @@ INTERVIEW → REJECTED
 
 ### 第七阶段：实现 LangGraph 工作流
 
+> 实施状态：已完成。分类、抽取、申请匹配、Validation、两段人工审核、
+> SQLite checkpoint 和恢复 API 已整合；Reply Agent 按阶段边界留到第八阶段。
+
 #### 阶段目标
 
 在分类、抽取、匹配和状态管理分别可运行后，再整合成 LangGraph 工作流。

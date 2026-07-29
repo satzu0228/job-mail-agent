@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
+from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -64,6 +66,12 @@ class ApplicationModelExecutionError(RuntimeError):
     """Application Agent 执行或输出校验失败。"""
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedReviewDecision:
+    task: ReviewTask
+    should_resume: bool
+
+
 class ApplicationManagementService:
     def __init__(
         self,
@@ -81,12 +89,21 @@ class ApplicationManagementService:
         self._model_name = model_name
         self._emails = EmailRepository(session, user_id)
 
-    def match_email(self, email_id: int) -> ApplicationMatchResponse:
+    def match_email(
+        self,
+        email_id: int,
+        *,
+        workflow_run_id: str | None = None,
+    ) -> ApplicationMatchResponse:
         email = self._emails.get(email_id)
         analysis = self._current_analysis(email_id)
         self._validate_analysis(analysis)
 
-        idempotency_key = f"match-application:{email_id}:{analysis.id}"
+        idempotency_key = (
+            f"match-application:{email_id}:{analysis.id}"
+            if workflow_run_id is None
+            else f"workflow-match:{workflow_run_id}:{analysis.id}"
+        )
         existing = self._session.scalar(
             select(ReviewTask).where(ReviewTask.idempotency_key == idempotency_key)
         )
@@ -104,10 +121,30 @@ class ApplicationManagementService:
 
         # 模型调用期间不持有数据库事务或行锁。
         self._session.rollback()
+        model_started = perf_counter()
         try:
             suggestion = self._agent.run(agent_input)
         except Exception as exc:
+            if workflow_run_id is not None:
+                model_duration_ms = round((perf_counter() - model_started) * 1000, 2)
+                with self._session.begin():
+                    workflow = self._session.get(WorkflowRun, workflow_run_id)
+                    if workflow is not None:
+                        workflow.agent_trace = [
+                            *workflow.agent_trace,
+                            {
+                                "agent": "application",
+                                "node": "match_application",
+                                "prompt_version": self._agent.prompt_version,
+                                "status": "FAILED",
+                                "error_code": "MODEL_EXECUTION_ERROR",
+                                "error_message": "申请匹配模型执行失败",
+                                "duration_ms": model_duration_ms,
+                                "recorded_at": _utc_now().isoformat(),
+                            },
+                        ]
             raise ApplicationModelExecutionError("申请匹配模型执行失败") from exc
+        model_duration_ms = round((perf_counter() - model_started) * 1000, 2)
         self._validate_agent_output(suggestion, candidates, facts)
 
         with self._session.begin():
@@ -121,6 +158,8 @@ class ApplicationManagementService:
                 candidates=candidates,
                 suggestion=suggestion,
                 idempotency_key=idempotency_key,
+                workflow_run_id=workflow_run_id,
+                model_duration_ms=model_duration_ms,
             )
         return ApplicationMatchResponse(
             email_id=email_id,
@@ -248,33 +287,58 @@ class ApplicationManagementService:
         candidates: list[ApplicationCandidate],
         suggestion: ApplicationAgentOutput,
         idempotency_key: str,
+        workflow_run_id: str | None,
+        model_duration_ms: float,
     ) -> ReviewTask:
         now = _utc_now()
-        run_id = str(uuid4())
-        workflow = WorkflowRun(
-            id=run_id,
-            thread_id=str(uuid4()),
-            user_id=self._user_id,
-            email_id=email.id,
-            status=WorkflowRunStatus.WAITING_REVIEW,
-            current_node="application_review",
-            graph_version="phase-6-standalone.v1",
-            model_provider=self._model_provider,
-            model_name=self._model_name,
-            prompt_versions={"application": self._agent.prompt_version},
-            agent_trace=[
-                {
-                    "agent": "application",
-                    "prompt_version": self._agent.prompt_version,
-                    "confidence": suggestion.confidence,
-                    "recommendation": suggestion.recommendation.value,
-                }
-            ],
-            started_at=now,
-        )
-        self._session.add(workflow)
-        # 两表存在 pending_review_task_id 循环外键，先落库工作流再创建审核任务。
-        self._session.flush()
+        if workflow_run_id is None:
+            run_id = str(uuid4())
+            workflow = WorkflowRun(
+                id=run_id,
+                thread_id=str(uuid4()),
+                user_id=self._user_id,
+                email_id=email.id,
+                status=WorkflowRunStatus.WAITING_REVIEW,
+                current_node="application_review",
+                graph_version="phase-6-standalone.v1",
+                model_provider=self._model_provider,
+                model_name=self._model_name,
+                prompt_versions={"application": self._agent.prompt_version},
+                agent_trace=[],
+                started_at=now,
+            )
+            self._session.add(workflow)
+            # 两表存在 pending_review_task_id 循环外键，先落库工作流再创建审核任务。
+            self._session.flush()
+        else:
+            run_id = workflow_run_id
+            workflow = self._session.get(WorkflowRun, run_id)
+            if (
+                workflow is None
+                or workflow.user_id != self._user_id
+                or workflow.email_id != email.id
+            ):
+                raise ResourceConflictError("工作流与当前邮件不匹配")
+            workflow.status = WorkflowRunStatus.WAITING_REVIEW
+            workflow.current_node = "human_review"
+            workflow.prompt_versions = {
+                **workflow.prompt_versions,
+                "application": self._agent.prompt_version,
+            }
+        workflow.agent_trace = [
+            *workflow.agent_trace,
+            {
+                "agent": "application",
+                "node": "match_application",
+                "prompt_version": self._agent.prompt_version,
+                "confidence": suggestion.confidence,
+                "recommendation": suggestion.recommendation.value,
+                "output": suggestion.model_dump(mode="json"),
+                "status": "SUCCEEDED",
+                "duration_ms": model_duration_ms,
+                "recorded_at": now.isoformat(),
+            },
+        ]
         selected = suggestion.selected_application_id
         selected_application = (
             self._session.get(JobApplication, selected) if selected is not None else None
@@ -377,12 +441,26 @@ class ReviewTaskService:
         task_id: str,
         decision: ReviewDecision,
     ) -> ReviewDecisionResponse:
+        recorded = self.record_decision(task_id, decision, update_workflow=True)
+        if not recorded.should_resume:
+            return self._existing_response(recorded.task)
+        if recorded.task.status is ReviewTaskStatus.REJECTED:
+            return ReviewDecisionResponse(review_task=recorded.task)
+        return self.execute_decided(task_id, update_workflow=True)
+
+    def record_decision(
+        self,
+        task_id: str,
+        decision: ReviewDecision,
+        *,
+        update_workflow: bool,
+    ) -> RecordedReviewDecision:
         with self._session.begin():
             task = self.get(task_id, for_update=True)
             if task.status is ReviewTaskStatus.SUCCEEDED:
-                return self._existing_response(task)
+                return RecordedReviewDecision(task=task, should_resume=False)
             if task.status is ReviewTaskStatus.REJECTED and not decision.approve:
-                return ReviewDecisionResponse(review_task=task)
+                return RecordedReviewDecision(task=task, should_resume=False)
             if task.status is not ReviewTaskStatus.PENDING:
                 raise ResourceConflictError(
                     f"审核任务当前状态 {task.status.value} 不允许提交决策"
@@ -399,14 +477,41 @@ class ReviewTaskService:
             task.reviewed_at = now
             if not decision.approve:
                 task.status = ReviewTaskStatus.REJECTED
-                self._update_workflow_after_decision(task, follow_up=None)
+                if update_workflow:
+                    self._update_workflow_after_decision(task, follow_up=None)
                 self._session.flush()
-                return ReviewDecisionResponse(review_task=task)
+                return RecordedReviewDecision(task=task, should_resume=True)
 
             payload = dict(task.proposed_payload)
             if decision.reviewed_payload:
                 payload.update(decision.reviewed_payload)
             self._validate_approved_payload(task, payload)
+            task.status = ReviewTaskStatus.APPROVED
+            self._session.flush()
+            return RecordedReviewDecision(task=task, should_resume=True)
+
+    def execute_decided(
+        self,
+        task_id: str,
+        *,
+        update_workflow: bool,
+    ) -> ReviewDecisionResponse:
+        with self._session.begin():
+            task = self.get(task_id, for_update=True)
+            if task.status is ReviewTaskStatus.SUCCEEDED:
+                return self._existing_response(task)
+            if task.status is ReviewTaskStatus.REJECTED:
+                return ReviewDecisionResponse(review_task=task)
+            if task.status is not ReviewTaskStatus.APPROVED:
+                raise ResourceConflictError(
+                    f"审核任务当前状态 {task.status.value} 不允许执行"
+                )
+
+            payload = dict(task.proposed_payload)
+            if task.reviewed_payload:
+                payload.update(task.reviewed_payload)
+            self._validate_approved_payload(task, payload)
+            now = _utc_now()
             task.status = ReviewTaskStatus.EXECUTING
             execution = ActionExecution(
                 review_task_id=task.id,
@@ -430,7 +535,8 @@ class ReviewTaskService:
             }
             execution.finished_at = _utc_now()
             task.status = ReviewTaskStatus.SUCCEEDED
-            self._update_workflow_after_decision(task, follow_up=follow_up)
+            if update_workflow:
+                self._update_workflow_after_decision(task, follow_up=follow_up)
             self._session.flush()
             return ReviewDecisionResponse(
                 review_task=task,
@@ -629,6 +735,9 @@ class ReviewTaskService:
             execution=execution,
             follow_up_review_task=follow_up,
         )
+
+    def response_for_task(self, task_id: str) -> ReviewDecisionResponse:
+        return self._existing_response(self.get(task_id))
 
     def _owned_email(self, email_id: int | None) -> Email:
         if email_id is None:

@@ -38,6 +38,8 @@
   统一分析 API、版本化持久化与真实模型联调。
 - [第六阶段完成记录](phase-6/application-management-progress.md)：确定性候选查询、
   Application Agent、申请状态机、审核与幂等执行边界。
+- [第七阶段完成记录](phase-7/langgraph-workflow-progress.md)：强类型 LangGraph
+  工作流、加密 checkpoint、两段中断恢复、运行轨迹与真实 MySQL 验收。
 
 ## 文档职责规则
 

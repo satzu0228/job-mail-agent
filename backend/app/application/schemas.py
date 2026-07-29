@@ -36,6 +36,7 @@ from app.domain.enums import (
     TaskStatus,
     TaskType,
     TransportSecurity,
+    WorkflowRunStatus,
 )
 
 
@@ -285,6 +286,27 @@ class ReviewDecisionResponse(ApiSchema):
     review_task: ReviewTaskRead
     execution: ActionExecutionRead | None = None
     follow_up_review_task: ReviewTaskRead | None = None
+
+
+class WorkflowRunRead(UtcResponseSchema):
+    id: str
+    thread_id: str
+    user_id: int
+    email_id: int
+    status: WorkflowRunStatus
+    current_node: str | None
+    graph_version: str
+    model_provider: str
+    model_name: str
+    prompt_versions: dict[str, Any]
+    agent_trace: list[dict[str, Any]]
+    pending_review_task_id: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class TaskCreate(ApiSchema):

@@ -12,7 +12,9 @@ from app.application.email_analysis import (
     EmailNotReadyForAnalysisError,
     NonJobEmailExtractionError,
 )
+from app.application.workflow import WorkflowCheckpointUnavailableError
 from app.core.config import get_settings
+from app.infrastructure.checkpoint import CheckpointConfigurationError
 from app.infrastructure.db.repositories import (
     EntityNotFoundError,
     ResourceConflictError,
@@ -103,12 +105,23 @@ def create_app() -> FastAPI:
         )
 
     @application.exception_handler(LLMConfigurationError)
+    @application.exception_handler(CheckpointConfigurationError)
     def model_configuration_handler(
         request: Request,
-        exc: LLMConfigurationError,
+        exc: LLMConfigurationError | CheckpointConfigurationError,
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": str(exc)},
+        )
+
+    @application.exception_handler(WorkflowCheckpointUnavailableError)
+    def checkpoint_unavailable_handler(
+        request: Request,
+        exc: WorkflowCheckpointUnavailableError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc)},
         )
     return application
