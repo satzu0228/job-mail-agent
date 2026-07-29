@@ -2,8 +2,9 @@
 
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
-> 当前进度：前八阶段已完成；四 Agent、三段可恢复审核、回复草稿和 SMTP 幂等
-> Executor 已实现，下一步进入第九阶段 Vue 3 前端开发
+> 当前进度：前八阶段已完成；第九阶段 Vue 3 核心页面已实现并接通现有 API，
+> 已完成首轮真实 FastAPI/MySQL 浏览器验收；下一项实现 163、126、QQ、Gmail
+> 和自定义 IMAP/SMTP Provider 预设，并继续补齐端到端验证和查询接口
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论
@@ -646,6 +647,45 @@ POST /api/v1/reply-drafts/{id}/send
 #### 阶段目标
 
 围绕已完成的后端接口实现核心业务页面。
+
+#### 多邮箱 Provider 扩展
+
+邮箱配置不得在前端写死 163。第九阶段增加 Provider 预设层，在仍保持“单用户、
+同一时间只启用一个邮箱账户”的前提下，支持：
+
+- 163 邮箱；
+- 126 邮箱；
+- QQ 邮箱；
+- Gmail；
+- 自定义 IMAP/SMTP 邮箱。
+
+选择预设 Provider 后，由前端自动填充 IMAP/SMTP 主机、端口和安全方式，普通用户
+只需填写邮箱地址和后端凭据引用。服务器参数收纳在“高级设置”中；选择自定义邮箱
+时才默认展开并要求用户填写。
+
+本扩展继续使用现有 `credential_ref` 安全边界，不在浏览器、普通业务字段或日志中
+保存授权码和应用专用密码。连接测试仍须分别展示 IMAP 和 SMTP 结果，不能因为收件
+连接成功就把发件能力标记为可用。
+
+Gmail 首版只支持应用专用密码方式，并在界面提示其账户需要满足 Google 的相关安全
+条件；不实现“使用 Google 登录”。Outlook.com 和 Microsoft 365 不纳入本轮预设，
+原因是当前密码登录适配层不能可靠支持 Exchange Online 的现代认证要求。后续应先
+实现 OAuth2/XOAUTH2 凭据适配和令牌刷新，再启用 Outlook Provider，不能只增加一个
+服务器地址选项就宣称支持。
+
+多 Provider 验收至少覆盖：
+
+1. 每个预设能映射到预期的 IMAP/SMTP 配置，切换 Provider 不遗留上一个预设值。
+2. 自定义 Provider 能保存用户填写的主机、端口和安全方式。
+3. 连接测试独立展示收件和发件结果，失败信息不泄露凭据。
+4. 现有 163 真实邮箱同步、分析、审核和 SMTP 发送回归不受影响。
+5. 前端测试覆盖 Provider 预设映射、自定义模式和高级设置显隐。
+
+认证边界依据：
+
+- [Google：使用应用专用密码登录](https://support.google.com/mail/answer/185833)
+- [Microsoft：Exchange Online 停用基本身份验证](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online)
+- [Microsoft：IMAP/POP/SMTP OAuth 认证](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth)
 
 #### 页面顺序
 

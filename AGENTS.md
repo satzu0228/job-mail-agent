@@ -24,7 +24,12 @@
 
 ### 当前阶段
 
-项目第一至第八阶段均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。第五阶段已完成 Classification/Extraction Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 适配、`classify`/`extract`/`analyze` API、非求职短路、邮件详情当前分析展示及 `email_analyses` 版本化持久化；脱敏面试 Fixture 经正式 API、真实 DeepSeek 和 MySQL 联调返回 `INTERVIEW`。第六阶段已完成确定性候选申请评分、Application Agent、`match-application` API、申请状态机、审核任务与幂等申请执行边界；关联/新建和阶段变化分两次审核，同阶段通知只写时间线事件。第七阶段已完成强类型 LangGraph State、确定性路由与 Validation Node、三 Agent 顺序编排、非求职短路、一次受限重试、两段 `interrupt`/`resume`、AES 加密 SQLite checkpoint、工作流启动/查询 API 及审核自动恢复；关闭并重建图后恢复测试通过，Stub Agent 下真实 MySQL 两段审核闭环最终为 `SUCCEEDED`。第八阶段已完成 Reply Agent、版本化 Prompt、确定性主题/地址/称呼/签名/MIME Formatter、最新草稿版本保护、`SEND_REPLY` 高风险审核、三段工作流中断恢复和图外 SMTP 幂等 Executor；真实 DeepSeek + 163 IMAP/SMTP + MySQL 闭环最终为 `SUCCEEDED`，相同幂等键重复提交返回同一执行记录，回复经 IMAP 确认实际到达。联调发现并修复审核任务回滚后读取过期 ORM 属性导致的事务重入缺陷，当前共 92 个测试通过。下一步进入第九阶段开发 Vue 3 前端。
+项目第一至第八阶段均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。第五阶段已完成 Classification/Extraction Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 适配、`classify`/`extract`/`analyze` API、非求职短路、邮件详情当前分析展示及 `email_analyses` 版本化持久化；脱敏面试 Fixture 经正式 API、真实 DeepSeek 和 MySQL 联调返回 `INTERVIEW`。第六阶段已完成确定性候选申请评分、Application Agent、`match-application` API、申请状态机、审核任务与幂等申请执行边界；关联/新建和阶段变化分两次审核，同阶段通知只写时间线事件。第七阶段已完成强类型 LangGraph State、确定性路由与 Validation Node、三 Agent 顺序编排、非求职短路、一次受限重试、两段 `interrupt`/`resume`、AES 加密 SQLite checkpoint、工作流启动/查询 API 及审核自动恢复；关闭并重建图后恢复测试通过，Stub Agent 下真实 MySQL 两段审核闭环最终为 `SUCCEEDED`。第八阶段已完成 Reply Agent、版本化 Prompt、确定性主题/地址/称呼/签名/MIME Formatter、最新草稿版本保护、`SEND_REPLY` 高风险审核、三段工作流中断恢复和图外 SMTP 幂等 Executor；真实 DeepSeek + 163 IMAP/SMTP + MySQL 闭环最终为 `SUCCEEDED`，相同幂等键重复提交返回同一执行记录，回复经 IMAP 确认实际到达。联调发现并修复审核任务回滚后读取过期 ORM 属性导致的事务重入缺陷，当前共 92 个后端测试通过。第九阶段已创建 Vue 3 + TypeScript + Element Plus 前端，完成邮件两栏页、飞书表格式求职进度、审核中心、日程/月历和邮箱设置页面并接通现有 FastAPI API；前端类型检查、3 个工具测试和生产构建通过，真实 FastAPI/MySQL 数据浏览器验收无页面级横向溢出。下一步继续补齐前端端到端测试和服务端查询接口。
+
+用户已批准第九阶段增加多邮箱 Provider 预设：首批支持 163、126、QQ、Gmail
+应用专用密码和自定义 IMAP/SMTP，但仍只要求同一时间启用一个账户。真实闭环回归
+继续以 163 为基线。Outlook.com/Microsoft 365 必须等 OAuth2/XOAUTH2 凭据适配与
+令牌刷新完成后才能标记为支持，不得仅凭服务器地址预设宣称已接入。
 
 - 第三方参考仓库统一放在 `references/`，不纳入本项目版本历史。
 - 针对参考项目的非侵入式实验放在 `experiments/email-ai-agent/`。

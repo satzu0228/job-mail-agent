@@ -55,3 +55,4 @@ temp/
 *.sqlite
 *.sqlite3
 reports/generated/
+.artifacts/

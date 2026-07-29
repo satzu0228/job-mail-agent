@@ -42,6 +42,8 @@
   工作流、加密 checkpoint、两段中断恢复、运行轨迹与真实 MySQL 验收。
 - [第八阶段完成记录](phase-8/reply-and-smtp-progress.md)：Reply Agent、草稿审核、
   确定性格式化、三段工作流中断与 SMTP 幂等发送边界。
+- [第九阶段前端进展](phase-9/vue-frontend-progress.md)：Vue 3 核心页面、飞书表格式
+  求职进度、邮件/审核/日程/设置交互及真实数据浏览器验收。
 
 ## 文档职责规则
 
