@@ -262,6 +262,18 @@ def get_email(email_id: int, use_case: ServiceDependency) -> EmailDetail:
     return EmailDetail.model_validate(use_case.emails.get(email_id))
 
 
+@router.post(
+    "/emails/{email_id}/refresh-content",
+    response_model=EmailDetail,
+    tags=["emails"],
+)
+def refresh_email_content(
+    email_id: int,
+    use_case: EmailAccessDependency,
+) -> EmailDetail:
+    return EmailDetail.model_validate(use_case.refresh_content(email_id))
+
+
 @router.get(
     "/job-applications",
     response_model=list[JobApplicationRead],

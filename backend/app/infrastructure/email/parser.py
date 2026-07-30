@@ -29,6 +29,7 @@ _ALLOWED_TAGS = {
     "h3",
     "hr",
     "i",
+    "img",
     "li",
     "ol",
     "p",
@@ -58,10 +59,17 @@ _GLOBAL_ATTRIBUTES = {"align", "class", "dir", "id", "lang", "style", "title"}
 _TAG_ATTRIBUTES = {
     "a": {"href"},
     "font": {"color", "face", "size"},
+    "img": {"alt", "height", "src", "width"},
     "table": {"bgcolor", "border", "cellpadding", "cellspacing", "width"},
     "td": {"bgcolor", "colspan", "height", "rowspan", "valign", "width"},
     "th": {"bgcolor", "colspan", "height", "rowspan", "valign", "width"},
 }
+_VOID_TAGS = {"br", "hr", "img"}
+_SAFE_DATA_IMAGE = re.compile(
+    r"^data:image/(?:gif|jpe?g|png|webp);base64,[a-z0-9+/=\s]+$",
+    re.IGNORECASE,
+)
+_MAX_DATA_IMAGE_LENGTH = 2_800_000
 _ALLOWED_STYLE_PROPERTIES = {
     "background",
     "background-color",
@@ -180,7 +188,7 @@ class _SafeHtmlParser(HTMLParser):
         if tag in _SKIP_CONTENT_TAGS:
             self.skip_depth += 1
             return
-        if self.skip_depth or tag == "img" or tag not in _ALLOWED_TAGS:
+        if self.skip_depth or tag not in _ALLOWED_TAGS:
             return
         if tag == "style":
             self.style_depth += 1
@@ -194,11 +202,25 @@ class _SafeHtmlParser(HTMLParser):
                 continue
             if name == "href" and not _safe_url(value):
                 continue
+            if tag == "img" and name == "src":
+                image_source = _sanitize_image_source(value)
+                if image_source is None:
+                    continue
+                name, value = image_source
             if name == "style":
                 value = _sanitize_style(value)
                 if not value:
                     continue
             safe_attrs.append(f' {name}="{escape(value, quote=True)}"')
+        if tag == "img":
+            if not any(
+                attribute.startswith(
+                    (' src="', ' data-jm-cid="', ' data-jm-remote-src="')
+                )
+                for attribute in safe_attrs
+            ):
+                return
+            safe_attrs.extend((' loading="lazy"', ' decoding="async"'))
         if tag == "a":
             safe_attrs.append(
                 ' target="_blank" rel="nofollow noopener noreferrer"'
@@ -211,7 +233,7 @@ class _SafeHtmlParser(HTMLParser):
         attrs: list[tuple[str, str | None]],
     ) -> None:
         self.handle_starttag(tag, attrs)
-        if tag.lower() in _ALLOWED_TAGS and tag.lower() not in {"br", "hr"}:
+        if tag.lower() in _ALLOWED_TAGS and tag.lower() not in _VOID_TAGS:
             self.handle_endtag(tag)
 
     def handle_endtag(self, tag: str) -> None:
@@ -223,7 +245,7 @@ class _SafeHtmlParser(HTMLParser):
             self.style_depth -= 1
             self.parts.append("</style>")
             return
-        if not self.skip_depth and tag in _ALLOWED_TAGS and tag not in {"br", "hr"}:
+        if not self.skip_depth and tag in _ALLOWED_TAGS and tag not in _VOID_TAGS:
             self.parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
@@ -347,7 +369,7 @@ def parse_email(
                     target.append(content)
             except (LookupError, UnicodeError, ValueError):
                 partial = True
-        for part in message.iter_attachments():
+        for part in attachment_parts(message):
             payload = part.get_payload(decode=True)
             attachments.append(
                 {
@@ -408,6 +430,45 @@ def _safe_url(value: str) -> bool:
     return parsed.scheme.lower() in {"http", "https", "mailto"} and bool(
         parsed.netloc or parsed.scheme == "mailto"
     )
+
+
+def _sanitize_image_source(value: str) -> tuple[str, str] | None:
+    source = value.strip()
+    lowered = source.lower()
+    if lowered.startswith("cid:"):
+        content_id = source[4:].strip().strip("<>")
+        if content_id and len(content_id) <= 512 and not any(
+            ord(character) < 32 for character in content_id
+        ):
+            return "data-jm-cid", content_id
+        return None
+    if (
+        len(source) <= _MAX_DATA_IMAGE_LENGTH
+        and _SAFE_DATA_IMAGE.fullmatch(source)
+    ):
+        return "src", source
+    if source.startswith("//"):
+        source = f"https:{source}"
+    parsed = urlparse(source)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+        return "data-jm-remote-src", source
+    return None
+
+
+def attachment_parts(message: Message) -> list[Message]:
+    """按稳定顺序返回普通附件和带 Content-ID 的内嵌资源。"""
+    parts: list[Message] = []
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        disposition = part.get_content_disposition()
+        if (
+            disposition in {"attachment", "inline"}
+            or part.get_filename()
+            or part.get("Content-ID")
+        ):
+            parts.append(part)
+    return parts
 
 
 def _addresses(headers: list[str | Message]) -> list[tuple[str | None, str]]:

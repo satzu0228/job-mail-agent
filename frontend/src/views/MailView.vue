@@ -12,7 +12,7 @@ import {
   User,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { emailAccountApi, emailApi } from '@/api'
@@ -23,6 +23,12 @@ import {
   priorityMeta,
   workflowStatusLabels,
 } from '@/utils/dictionaries'
+import {
+  countRemoteEmailImages,
+  enhanceSanitizedEmailLinks,
+  normalizeContentId,
+  revealRemoteEmailImages,
+} from '@/utils/emailHtml'
 import { formatDateTime, recipientText } from '@/utils/format'
 import type { EmailAccount, EmailDetail, EmailListItem, WorkflowRun } from '@/types/api'
 
@@ -43,6 +49,9 @@ const syncing = ref(false)
 const processing = ref(false)
 const downloadingAttachment = ref<number | null>(null)
 const workflow = ref<WorkflowRun | null>(null)
+const externalImageCount = ref(0)
+const externalImagesAllowed = ref(false)
+const inlineImageUrls = new Set<string>()
 
 const filteredEmails = computed(() => {
   const normalized = keyword.value.trim().toLowerCase()
@@ -76,13 +85,14 @@ const missingFieldLabels = computed(() => {
 const emailHtmlDocument = computed(() => {
   const html = selectedEmail.value?.html_sanitized
   if (!html) return ''
+  const remoteImageSources = externalImagesAllowed.value ? ' http: https:' : ''
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; form-action 'none'; base-uri 'none'"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:${remoteImageSources}; font-src 'none'; form-action 'none'; base-uri 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -96,6 +106,7 @@ const emailHtmlDocument = computed(() => {
         overflow-wrap: anywhere;
       }
       img { max-width: 100%; height: auto; }
+      img[data-jm-remote-src]:not([src]) { visibility: hidden; }
       table { max-width: 100%; }
       pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     </style>
@@ -150,6 +161,9 @@ async function selectEmail(id: number, updateRoute = true) {
   if (loadingDetail.value) return
   loadingDetail.value = true
   workflow.value = null
+  externalImagesAllowed.value = false
+  externalImageCount.value = 0
+  clearInlineImageUrls()
   try {
     selectedEmail.value = await emailApi.detail(id)
     activeDetailTab.value = 'content'
@@ -232,6 +246,49 @@ async function downloadAttachment(attachment: Record<string, unknown>, index: nu
   }
 }
 
+function clearInlineImageUrls() {
+  for (const url of inlineImageUrls) URL.revokeObjectURL(url)
+  inlineImageUrls.clear()
+}
+
+async function handleEmailFrameLoad(event: Event) {
+  const frame = event.currentTarget as HTMLIFrameElement
+  const document = frame.contentDocument
+  const email = selectedEmail.value
+  if (!document || !email) return
+
+  enhanceSanitizedEmailLinks(document)
+  externalImageCount.value = countRemoteEmailImages(document)
+  if (externalImagesAllowed.value) revealRemoteEmailImages(document)
+
+  clearInlineImageUrls()
+  const attachmentsByContentId = new Map(
+    email.attachment_metadata
+      .map((metadata, index) => [normalizeContentId(metadata.content_id), index] as const)
+      .filter(([contentId]) => Boolean(contentId)),
+  )
+  await Promise.all(
+    [...document.querySelectorAll<HTMLImageElement>('img[data-jm-cid]')].map(
+      async (image) => {
+        const index = attachmentsByContentId.get(normalizeContentId(image.dataset.jmCid))
+        if (index === undefined) return
+        try {
+          const response = await emailApi.downloadAttachment(email.id, index)
+          if (!response.data.type.startsWith('image/') || response.data.type === 'image/svg+xml') {
+            return
+          }
+          if (selectedEmail.value?.id !== email.id || frame.contentDocument !== document) return
+          const url = URL.createObjectURL(response.data)
+          inlineImageUrls.add(url)
+          image.src = url
+        } catch {
+          // 内嵌图片读取失败时保留替代文本，不影响邮件正文。
+        }
+      },
+    ),
+  )
+}
+
 watch(
   () => route.params.emailId,
   (value) => {
@@ -241,6 +298,7 @@ watch(
 )
 
 onMounted(loadBaseData)
+onUnmounted(clearInlineImageUrls)
 </script>
 
 <template>
@@ -418,6 +476,17 @@ onMounted(loadBaseData)
                 <span>收件人</span>
                 <span>{{ selectedEmail.to_recipients.map(recipientText).join('，') || '—' }}</span>
               </div>
+              <div
+                v-if="externalImageCount > 0 && !externalImagesAllowed"
+                class="external-image-notice"
+              >
+                <span>
+                  该邮件包含 {{ externalImageCount }} 张外部图片，加载后可能会向发件人暴露已读状态。
+                </span>
+                <button type="button" @click="externalImagesAllowed = true">
+                  显示外部图片
+                </button>
+              </div>
               <iframe
                 v-if="selectedEmail.html_sanitized"
                 class="email-frame"
@@ -425,6 +494,7 @@ onMounted(loadBaseData)
                 title="邮件正文"
                 sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
                 referrerpolicy="no-referrer"
+                @load="handleEmailFrameLoad"
               />
               <pre v-else class="email-plain">{{ selectedEmail.plain_body || '邮件正文为空' }}</pre>
             </div>
@@ -931,6 +1001,34 @@ onMounted(loadBaseData)
 .recipient-row span:last-child {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.external-image-notice {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px 0 14px;
+  padding: 10px 12px;
+  color: #6b4f18;
+  font-size: 12px;
+  background: #fff8e8;
+  border: 1px solid #f2ddb0;
+  border-radius: 6px;
+}
+
+.external-image-notice button {
+  flex: 0 0 auto;
+  padding: 0;
+  color: #245bdb;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.external-image-notice button:hover {
+  text-decoration: underline;
 }
 
 .email-frame {

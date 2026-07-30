@@ -32,6 +32,7 @@ from app.infrastructure.email import (
     ParsedEmail,
     RemoteEmail,
     SmtpConnectionTester,
+    attachment_parts,
     parse_email,
 )
 from app.infrastructure.security import (
@@ -177,7 +178,7 @@ class EmailAccessService:
         except EmailConnectionError as exc:
             raise EmailSyncError("附件读取失败") from exc
         message = BytesParser(policy=policy.default).parsebytes(raw_message)
-        attachments = list(message.iter_attachments())
+        attachments = attachment_parts(message)
         if attachment_index >= len(attachments):
             raise EntityNotFoundError("远程邮件中的附件已发生变化")
         part = attachments[attachment_index]
@@ -192,6 +193,34 @@ class EmailAccessService:
             content_type=part.get_content_type() or "application/octet-stream",
             content=content,
         )
+
+    def refresh_content(self, email_id: int) -> Email:
+        """从原邮件重新生成可安全展示的正文和附件索引。"""
+        email = self.emails.get(email_id)
+        account = self.accounts.get(email.account_id)
+        try:
+            credential = self._credential_resolver.resolve(account.credential_ref)
+            raw_message = self._imap_client.fetch_raw_message(
+                account,
+                credential,
+                folder=email.current_folder,
+                uid=email.imap_uid,
+                max_message_bytes=self._max_message_bytes,
+            )
+        except CredentialNotConfiguredError as exc:
+            raise ResourceConflictError("邮箱凭据尚未配置") from exc
+        except EmailConnectionError as exc:
+            raise EmailSyncError("原邮件读取失败") from exc
+
+        parsed = parse_email(raw_message, received_at=email.received_at)
+        email.plain_body = parsed.plain_body
+        email.html_sanitized = parsed.html_sanitized
+        email.analysis_text = parsed.analysis_text
+        email.attachment_metadata = parsed.attachment_metadata
+        email.parse_status = parsed.parse_status
+        self._session.commit()
+        self._session.refresh(email)
+        return email
 
     def test_connection(self, account_id: int) -> EmailConnectionTestResult:
         account = self.accounts.get(account_id)

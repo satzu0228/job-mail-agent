@@ -43,7 +43,10 @@ def test_mime_parser_decodes_chinese_and_keeps_only_attachment_metadata() -> Non
     assert parsed.analysis_text == "您好，请于周五参加面试。"
     assert "script" not in parsed.html_sanitized
     assert "onload" not in parsed.html_sanitized
-    assert "tracker.example" not in parsed.html_sanitized
+    assert (
+        'data-jm-remote-src="https://tracker.example/pixel"'
+        in parsed.html_sanitized
+    )
     assert "javascript:" not in parsed.html_sanitized
     assert "https://meeting.example/room" in parsed.html_sanitized
     assert parsed.attachment_metadata == [
@@ -70,7 +73,10 @@ def test_html_only_email_produces_safe_analysis_text() -> None:
 
     assert parsed.plain_body is None
     assert parsed.analysis_text == "请在今晚前提交材料。"
-    assert "tracking.example" not in parsed.html_sanitized
+    assert (
+        'data-jm-remote-src="https://tracking.example/1"'
+        in parsed.html_sanitized
+    )
 
 
 def test_oversized_message_is_header_only_and_marked_partial() -> None:
@@ -91,17 +97,66 @@ def test_oversized_message_is_header_only_and_marked_partial() -> None:
     assert parsed.attachment_metadata[0]["download_skipped"] is True
 
 
-def test_sanitizer_removes_dangerous_protocols_and_remote_images() -> None:
+def test_sanitizer_removes_dangerous_protocols_and_defers_remote_images() -> None:
     cleaned = sanitize_html(
         '<img src="https://remote.example/pixel">'
         '<a href="data:text/html,bad" onclick="bad()">bad</a>'
         '<a href="mailto:hr@example.com">mail</a>'
     )
 
-    assert "img" not in cleaned
+    assert (
+        '<img data-jm-remote-src="https://remote.example/pixel"'
+        in cleaned
+    )
     assert "data:" not in cleaned
     assert "onclick" not in cleaned
     assert "mailto:hr@example.com" in cleaned
+
+
+def test_sanitizer_keeps_cid_and_limited_data_images() -> None:
+    cleaned = sanitize_html(
+        '<img src="cid:company-logo" alt="公司标志">'
+        '<img src="data:image/png;base64,aGVsbG8=" alt="内嵌图片">'
+        '<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="危险图片">'
+    )
+
+    assert 'data-jm-cid="company-logo"' in cleaned
+    assert 'src="data:image/png;base64,aGVsbG8="' in cleaned
+    assert "data:image/svg+xml" not in cleaned
+    assert 'loading="lazy"' in cleaned
+
+
+def test_mime_parser_indexes_related_cid_image_for_safe_display() -> None:
+    message = EmailMessage()
+    message["From"] = "HR <hr@example.com>"
+    message["To"] = "candidate@example.com"
+    message.set_content("面试邀请")
+    message.add_alternative(
+        '<p>面试邀请</p><img src="cid:company-logo" alt="公司标志">',
+        subtype="html",
+    )
+    html_part = message.get_payload()[-1]
+    html_part.add_related(
+        b"\x89PNG\r\n\x1a\nfixture",
+        maintype="image",
+        subtype="png",
+        cid="<company-logo>",
+        disposition="inline",
+        filename="logo.png",
+    )
+
+    parsed = parse_email(message.as_bytes())
+
+    assert 'data-jm-cid="company-logo"' in parsed.html_sanitized
+    assert parsed.attachment_metadata == [
+        {
+            "filename": "logo.png",
+            "content_type": "image/png",
+            "size_bytes": 15,
+            "content_id": "<company-logo>",
+            "inline": True,
+        }
+    ]
 
 
 def test_sanitizer_keeps_safe_email_layout_and_button_styles() -> None:

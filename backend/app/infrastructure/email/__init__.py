@@ -16,7 +16,7 @@ from app.infrastructure.email.formatter import (
     recipient,
     reply_subject,
 )
-from app.infrastructure.email.parser import ParsedEmail, parse_email
+from app.infrastructure.email.parser import ParsedEmail, attachment_parts, parse_email
 
 __all__ = [
     "EmailConnectionError",
@@ -29,6 +29,7 @@ __all__ = [
     "SmtpDeliveryUnknownError",
     "SmtpMailer",
     "build_message",
+    "attachment_parts",
     "format_reply_body",
     "parse_email",
     "recipient",
