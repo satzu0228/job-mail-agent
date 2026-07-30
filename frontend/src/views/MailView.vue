@@ -2,6 +2,7 @@
 import {
   Connection,
   Document,
+  Download,
   Files,
   Link,
   Loading,
@@ -33,6 +34,7 @@ const loadingList = ref(false)
 const loadingDetail = ref(false)
 const syncing = ref(false)
 const processing = ref(false)
+const downloadingAttachment = ref<number | null>(null)
 const workflow = ref<WorkflowRun | null>(null)
 
 const filteredEmails = computed(() => {
@@ -134,6 +136,24 @@ function openReview() {
 
 function attachmentName(item: Record<string, unknown>, index: number): string {
   return String(item.filename ?? item.name ?? `附件 ${index + 1}`)
+}
+
+async function downloadAttachment(attachment: Record<string, unknown>, index: number) {
+  if (!selectedEmail.value) return
+  downloadingAttachment.value = index
+  try {
+    const response = await emailApi.downloadAttachment(selectedEmail.value.id, index)
+    const url = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = attachmentName(attachment, index)
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    downloadingAttachment.value = null
+  }
 }
 
 watch(
@@ -370,8 +390,17 @@ onMounted(loadBaseData)
                 <ElIcon :size="20"><Document /></ElIcon>
                 <div>
                   <strong>{{ attachmentName(attachment, index) }}</strong>
-                  <span>附件仅展示元数据，系统不会自动执行附件内容</span>
+                  <span>附件按不可信输入下载，系统不会自动执行其内容</span>
                 </div>
+                <ElButton
+                  class="attachment-download"
+                  :icon="Download"
+                  :loading="downloadingAttachment === index"
+                  :disabled="Boolean(attachment.download_skipped)"
+                  @click="downloadAttachment(attachment, index)"
+                >
+                  {{ attachment.download_skipped ? '超过安全上限' : '下载' }}
+                </ElButton>
               </div>
               <div v-if="selectedEmail.attachment_metadata.length === 0" class="empty-state">
                 这封邮件没有附件
@@ -816,6 +845,10 @@ onMounted(loadBaseData)
 .attachment-row > div {
   display: grid;
   gap: 3px;
+}
+
+.attachment-download {
+  margin-left: auto;
 }
 
 .attachment-row span {

@@ -94,6 +94,33 @@ class ImapMailboxClient:
         finally:
             self._close(client)
 
+    def fetch_raw_message(
+        self,
+        account: EmailAccount,
+        credential: str,
+        *,
+        folder: str,
+        uid: int,
+        max_message_bytes: int,
+    ) -> bytes:
+        client = self._connect(account)
+        try:
+            client.login(account.email_address, credential)
+            self._identify_client(client, account)
+            status, _ = client.select(folder, readonly=True)
+            if status != "OK":
+                raise EmailConnectionError("无法以只读方式打开邮件文件夹")
+            remote = self._fetch_one(client, uid, max_message_bytes)
+            if remote.truncated:
+                raise EmailConnectionError("原邮件超过安全下载上限")
+            return remote.raw_message
+        except EmailConnectionError:
+            raise
+        except (imaplib.IMAP4.error, OSError, ValueError) as exc:
+            raise EmailConnectionError("IMAP 附件读取失败") from exc
+        finally:
+            self._close(client)
+
     def _connect(self, account: EmailAccount) -> imaplib.IMAP4:
         try:
             if account.imap_security == TransportSecurity.SSL:

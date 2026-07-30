@@ -176,6 +176,29 @@ export interface JobApplicationCreate {
   notes?: string | null
 }
 
+export interface ApplicationEvent {
+  id: number
+  application_id: number
+  source_email_id: number | null
+  workflow_run_id: string | null
+  event_type: string
+  previous_stage: ApplicationStage | null
+  proposed_stage: ApplicationStage | null
+  confirmed_stage: ApplicationStage | null
+  raw_time_text: string | null
+  event_at: string | null
+  source_timezone: string | null
+  details: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface Page<T> {
+  items: T[]
+  total: number
+  offset: number
+  limit: number
+}
+
 export interface Task {
   id: number
   user_id: number

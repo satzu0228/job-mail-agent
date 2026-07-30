@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { CircleCheck, CircleClose, Connection, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import { emailAccountApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import { formatDateTime } from '@/utils/format'
+import {
+  applyMailProviderPreset,
+  getMailProviderPreset,
+  mailProviderPresets,
+  type MailProviderId,
+} from '@/utils/mailProviders'
 import type {
   EmailAccount,
   EmailAccountCreate,
@@ -18,9 +24,11 @@ const createVisible = ref(false)
 const creating = ref(false)
 const testingId = ref<number | null>(null)
 const syncingId = ref<number | null>(null)
+const activatingId = ref<number | null>(null)
 const testVisible = ref(false)
 const testResult = ref<EmailConnectionTestResult | null>(null)
 const formRef = ref<FormInstance>()
+const advancedVisible = ref(false)
 
 const form = reactive<EmailAccountCreate>({
   provider: '163',
@@ -50,6 +58,26 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
+}
+
+const selectedPreset = computed(() => getMailProviderPreset(form.provider))
+
+watch(
+  () => form.provider,
+  (provider) => {
+    applyMailProviderPreset(form, provider as MailProviderId)
+    advancedVisible.value = provider === 'custom'
+    formRef.value?.clearValidate(['imap_host', 'smtp_host'])
+  },
+)
+
+function openCreateDialog() {
+  form.email_address = ''
+  form.credential_ref = 'JOB_MAIL_EMAIL_AUTH_CODE'
+  form.is_active = !accounts.value.some((account) => account.is_active)
+  applyMailProviderPreset(form, '163')
+  advancedVisible.value = false
+  createVisible.value = true
 }
 
 async function loadAccounts() {
@@ -103,6 +131,20 @@ async function syncAccount(account: EmailAccount) {
   }
 }
 
+async function setActive(account: EmailAccount, value: boolean) {
+  activatingId.value = account.id
+  try {
+    await emailAccountApi.setActive(account.id, value)
+    ElMessage.success(value ? '已切换当前启用邮箱' : '邮箱账户已停用')
+    await loadAccounts()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+    await loadAccounts()
+  } finally {
+    activatingId.value = null
+  }
+}
+
 onMounted(loadAccounts)
 </script>
 
@@ -113,7 +155,7 @@ onMounted(loadAccounts)
         <h2>邮箱账户</h2>
         <p>系统通过 IMAP 只读同步收件箱，通过 SMTP 发送经你确认的回复。</p>
       </div>
-      <ElButton type="primary" :icon="Plus" @click="createVisible = true">添加邮箱</ElButton>
+      <ElButton type="primary" :icon="Plus" @click="openCreateDialog">添加邮箱</ElButton>
     </div>
 
     <section v-loading="loading" class="account-list">
@@ -124,9 +166,14 @@ onMounted(loadAccounts)
             <h3>{{ account.email_address_masked }}</h3>
             <span>{{ account.provider }} 邮箱</span>
           </div>
-          <ElTag :type="account.is_active ? 'success' : 'info'" effect="light">
-            {{ account.is_active ? '已启用' : '未启用' }}
-          </ElTag>
+          <div class="account-active">
+            <span>{{ account.is_active ? '当前启用' : '未启用' }}</span>
+            <ElSwitch
+              :model-value="account.is_active"
+              :loading="activatingId === account.id"
+              @change="setActive(account, Boolean($event))"
+            />
+          </div>
         </div>
 
         <dl class="connection-grid">
@@ -178,8 +225,8 @@ onMounted(loadAccounts)
       <div v-if="!loading && accounts.length === 0" class="surface account-empty">
         <div class="empty-mail-mark">@</div>
         <h3>还没有邮箱账户</h3>
-        <p>添加用于毕业设计演示的 163 测试邮箱，授权码从后端环境变量读取。</p>
-        <ElButton type="primary" @click="createVisible = true">添加邮箱</ElButton>
+        <p>添加 163、126、QQ、Gmail 或自定义邮箱，授权码从后端环境变量读取。</p>
+        <ElButton type="primary" @click="openCreateDialog">添加邮箱</ElButton>
       </div>
     </section>
 
@@ -195,53 +242,83 @@ onMounted(loadAccounts)
         <div class="form-grid">
           <ElFormItem label="邮箱服务商">
             <ElSelect v-model="form.provider">
-              <ElOption label="163 邮箱" value="163" />
+              <ElOption
+                v-for="preset in mailProviderPresets"
+                :key="preset.id"
+                :label="preset.label"
+                :value="preset.id"
+              />
             </ElSelect>
           </ElFormItem>
           <ElFormItem label="邮箱地址" prop="email_address">
-            <ElInput v-model="form.email_address" placeholder="example@163.com" />
+            <ElInput v-model="form.email_address" :placeholder="selectedPreset.emailPlaceholder" />
           </ElFormItem>
         </div>
 
-        <div class="protocol-section">
-          <h4>接收邮件（IMAP）</h4>
-          <div class="protocol-grid">
-            <ElFormItem label="服务器" prop="imap_host">
-              <ElInput v-model="form.imap_host" />
-            </ElFormItem>
-            <ElFormItem label="端口">
-              <ElInputNumber v-model="form.imap_port" :min="1" :max="65535" controls-position="right" />
-            </ElFormItem>
-            <ElFormItem label="安全方式">
-              <ElSelect v-model="form.imap_security">
-                <ElOption label="SSL" value="SSL" />
-                <ElOption label="STARTTLS" value="STARTTLS" />
-              </ElSelect>
-            </ElFormItem>
-          </div>
-        </div>
+        <ElAlert
+          v-if="selectedPreset.help"
+          class="provider-help"
+          type="warning"
+          :closable="false"
+          :title="selectedPreset.help"
+        />
 
-        <div class="protocol-section">
-          <h4>发送邮件（SMTP）</h4>
-          <div class="protocol-grid">
-            <ElFormItem label="服务器" prop="smtp_host">
-              <ElInput v-model="form.smtp_host" />
-            </ElFormItem>
-            <ElFormItem label="端口">
-              <ElInputNumber v-model="form.smtp_port" :min="1" :max="65535" controls-position="right" />
-            </ElFormItem>
-            <ElFormItem label="安全方式">
-              <ElSelect v-model="form.smtp_security">
-                <ElOption label="SSL" value="SSL" />
-                <ElOption label="STARTTLS" value="STARTTLS" />
-              </ElSelect>
-            </ElFormItem>
+        <ElButton
+          v-if="form.provider !== 'custom'"
+          text
+          type="primary"
+          class="advanced-toggle"
+          @click="advancedVisible = !advancedVisible"
+        >
+          {{ advancedVisible ? '收起高级设置' : '展开高级设置' }}
+        </ElButton>
+
+        <template v-if="advancedVisible">
+          <div class="protocol-section">
+            <h4>接收邮件（IMAP）</h4>
+            <div class="protocol-grid">
+              <ElFormItem label="服务器" prop="imap_host">
+                <ElInput v-model="form.imap_host" />
+              </ElFormItem>
+              <ElFormItem label="端口">
+                <ElInputNumber v-model="form.imap_port" :min="1" :max="65535" controls-position="right" />
+              </ElFormItem>
+              <ElFormItem label="安全方式">
+                <ElSelect v-model="form.imap_security">
+                  <ElOption label="SSL" value="SSL" />
+                  <ElOption label="STARTTLS" value="STARTTLS" />
+                </ElSelect>
+              </ElFormItem>
+            </div>
           </div>
-        </div>
+
+          <div class="protocol-section">
+            <h4>发送邮件（SMTP）</h4>
+            <div class="protocol-grid">
+              <ElFormItem label="服务器" prop="smtp_host">
+                <ElInput v-model="form.smtp_host" />
+              </ElFormItem>
+              <ElFormItem label="端口">
+                <ElInputNumber v-model="form.smtp_port" :min="1" :max="65535" controls-position="right" />
+              </ElFormItem>
+              <ElFormItem label="安全方式">
+                <ElSelect v-model="form.smtp_security">
+                  <ElOption label="SSL" value="SSL" />
+                  <ElOption label="STARTTLS" value="STARTTLS" />
+                </ElSelect>
+              </ElFormItem>
+            </div>
+          </div>
+        </template>
 
         <ElFormItem label="授权码环境变量名" prop="credential_ref">
           <ElInput v-model="form.credential_ref" />
           <p class="field-hint">这里只保存变量名称，不保存授权码本身。</p>
+        </ElFormItem>
+        <ElFormItem>
+          <ElCheckbox v-model="form.is_active">
+            添加后设为当前启用邮箱（会停用其他账户）
+          </ElCheckbox>
         </ElFormItem>
       </ElForm>
       <template #footer>
@@ -344,8 +421,13 @@ onMounted(loadAccounts)
   font-size: 11px;
 }
 
-.account-head .el-tag {
+.account-active {
+  display: flex;
+  gap: 8px;
+  align-items: center;
   margin-left: auto;
+  color: var(--jm-text-secondary);
+  font-size: 11px;
 }
 
 .connection-grid {
@@ -478,6 +560,15 @@ onMounted(loadAccounts)
   margin: 5px 0 0;
   color: var(--jm-text-tertiary);
   font-size: 11px;
+}
+
+.provider-help {
+  margin-bottom: 12px;
+}
+
+.advanced-toggle {
+  margin: 0 0 10px;
+  padding-left: 0;
 }
 
 .test-results {

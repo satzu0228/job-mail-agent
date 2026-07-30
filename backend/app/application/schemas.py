@@ -105,6 +105,10 @@ class EmailAccountRead(UtcResponseSchema):
     updated_at: datetime
 
 
+class EmailAccountActiveUpdate(ApiSchema):
+    is_active: bool
+
+
 class ConnectionCheck(ApiSchema):
     success: bool
     message: str
@@ -189,6 +193,13 @@ class EmailDetail(EmailListItem):
     current_analysis: EmailAnalysisRead | None = None
 
 
+class EmailPage(ApiSchema):
+    items: list[EmailListItem]
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
 class JobApplicationCreate(ApiSchema):
     company_name: str = Field(min_length=1, max_length=255)
     company_alias: str | None = Field(default=None, max_length=255)
@@ -231,6 +242,36 @@ class JobApplicationRead(UtcResponseSchema):
     updated_at: datetime
 
 
+class JobApplicationPage(ApiSchema):
+    items: list[JobApplicationRead]
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
+class ApplicationEventRead(UtcResponseSchema):
+    id: int
+    application_id: int
+    source_email_id: int | None
+    workflow_run_id: str | None
+    event_type: str
+    previous_stage: ApplicationStage | None
+    proposed_stage: ApplicationStage | None
+    confirmed_stage: ApplicationStage | None
+    raw_time_text: str | None
+    event_at: datetime | None
+    source_timezone: str | None
+    details: dict[str, Any] | None
+    created_at: datetime
+
+
+class ApplicationEventPage(ApiSchema):
+    items: list[ApplicationEventRead]
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
 class ApplicationMatchResponse(UtcResponseSchema):
     email_id: int
     analysis_id: int
@@ -266,6 +307,13 @@ class ReviewTaskRead(UtcResponseSchema):
     version: int
     created_at: datetime
     updated_at: datetime
+
+
+class ReviewTaskPage(ApiSchema):
+    items: list[ReviewTaskRead]
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
 
 
 class ActionExecutionRead(UtcResponseSchema):
@@ -359,6 +407,13 @@ class TaskRead(UtcResponseSchema):
     version: int
     created_at: datetime
     updated_at: datetime
+
+
+class TaskPage(ApiSchema):
+    items: list[TaskRead]
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
 
 
 class ReplyDraftCreate(ApiSchema):

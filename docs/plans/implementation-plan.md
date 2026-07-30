@@ -3,8 +3,9 @@
 > 文档状态：已结合第一阶段实际结果完成首次审核
 > 审核日期：2026-07-27
 > 当前进度：前八阶段已完成；第九阶段 Vue 3 核心页面已实现并接通现有 API，
-> 已完成首轮真实 FastAPI/MySQL 浏览器验收；下一项实现 163、126、QQ、Gmail
-> 和自定义 IMAP/SMTP Provider 预设，并继续补齐端到端验证和查询接口
+> 已完成首轮真实 FastAPI/MySQL 浏览器验收；163、126、QQ、Gmail 和自定义
+> IMAP/SMTP Provider 预设、单账户启用约束、分页查询、申请时间线和受控附件
+> 下载已实现；下一项继续补齐自动化端到端验证
 > 关联文档：`docs/phase-1/`、`docs/architecture/multi-agent-system-design.md`
 
 ## 文档审核结论

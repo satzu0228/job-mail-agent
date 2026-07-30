@@ -1,6 +1,7 @@
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.application.crud import BusinessCrudService
@@ -9,24 +10,36 @@ from app.application.email_access import (
     mask_email_address,
 )
 from app.application.schemas import (
+    ApplicationEventPage,
+    ApplicationEventRead,
+    EmailAccountActiveUpdate,
     EmailAccountCreate,
     EmailAccountRead,
     EmailConnectionTestResult,
     EmailDetail,
     EmailListItem,
+    EmailPage,
     EmailSyncRequest,
     EmailSyncResult,
     JobApplicationCreate,
+    JobApplicationPage,
     JobApplicationRead,
     JobApplicationUpdate,
     ReplyDraftCreate,
     ReplyDraftRead,
     ReplyDraftUpdate,
     TaskCreate,
+    TaskPage,
     TaskRead,
     TaskUpdate,
 )
 from app.core.config import Settings, get_settings
+from app.domain.enums import (
+    ApplicationStage,
+    ApplicationStatus,
+    EmailCategory,
+    TaskStatus,
+)
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.session import get_db_session
 
@@ -35,6 +48,8 @@ SessionDependency = Annotated[Session, Depends(get_db_session)]
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
 PageOffset = Annotated[int, Query(ge=0)]
 PageLimit = Annotated[int, Query(ge=1, le=100)]
+ApplicationStatusFilter = Annotated[ApplicationStatus | None, Query(alias="status")]
+TaskStatusFilter = Annotated[TaskStatus | None, Query(alias="status")]
 
 
 def service(session: SessionDependency, settings: SettingsDependency) -> BusinessCrudService:
@@ -106,6 +121,21 @@ def create_email_account(
     return _account_read(use_case.create_account(payload))
 
 
+@router.patch(
+    "/email-accounts/{account_id}/active",
+    response_model=EmailAccountRead,
+    tags=["email-accounts"],
+)
+def set_email_account_active(
+    account_id: int,
+    payload: EmailAccountActiveUpdate,
+    use_case: EmailAccessDependency,
+) -> EmailAccountRead:
+    return _account_read(
+        use_case.set_account_active(account_id, is_active=payload.is_active)
+    )
+
+
 @router.post(
     "/email-accounts/{account_id}/test-connection",
     response_model=EmailConnectionTestResult,
@@ -143,6 +173,62 @@ def list_emails(
     ]
 
 
+@router.get("/emails/query", response_model=EmailPage, tags=["emails"])
+def query_emails(
+    use_case: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
+    account_id: int | None = Query(default=None, gt=0),
+    keyword: str | None = Query(default=None, max_length=200),
+    application_id: int | None = Query(default=None, gt=0),
+    linked: bool | None = None,
+    category: EmailCategory | None = None,
+) -> EmailPage:
+    items, total = use_case.emails.query(
+        offset=offset,
+        limit=limit,
+        account_id=account_id,
+        keyword=keyword,
+        application_id=application_id,
+        linked=linked,
+        category=category,
+    )
+    return EmailPage(
+        items=[EmailListItem.model_validate(item) for item in items],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/emails/{email_id}/attachments/{attachment_index}",
+    tags=["emails"],
+)
+def download_email_attachment(
+    email_id: int,
+    attachment_index: int,
+    use_case: EmailAccessDependency,
+) -> Response:
+    attachment = use_case.download_attachment(email_id, attachment_index)
+    ascii_name = "".join(
+        character if 32 <= ord(character) < 127 else "_"
+        for character in attachment.filename
+    ).replace('"', "_").replace("\\", "_")
+    disposition = (
+        f"attachment; filename=\"{ascii_name}\"; "
+        f"filename*=UTF-8''{quote(attachment.filename)}"
+    )
+    return Response(
+        content=attachment.content,
+        media_type=attachment.content_type,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/emails/{email_id}", response_model=EmailDetail, tags=["emails"])
 def get_email(email_id: int, use_case: ServiceDependency) -> EmailDetail:
     return EmailDetail.model_validate(use_case.emails.get(email_id))
@@ -162,6 +248,58 @@ def list_applications(
         JobApplicationRead.model_validate(item)
         for item in use_case.applications.list(offset=offset, limit=limit)
     ]
+
+
+@router.get(
+    "/job-applications/query",
+    response_model=JobApplicationPage,
+    tags=["job-applications"],
+)
+def query_applications(
+    use_case: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
+    keyword: str | None = Query(default=None, max_length=200),
+    stage: ApplicationStage | None = None,
+    application_status: ApplicationStatusFilter = None,
+) -> JobApplicationPage:
+    items, total = use_case.applications.query(
+        offset=offset,
+        limit=limit,
+        keyword=keyword,
+        stage=stage,
+        status=application_status,
+    )
+    return JobApplicationPage(
+        items=[JobApplicationRead.model_validate(item) for item in items],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/job-applications/{application_id}/events",
+    response_model=ApplicationEventPage,
+    tags=["job-applications"],
+)
+def list_application_events(
+    application_id: int,
+    use_case: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
+) -> ApplicationEventPage:
+    items, total = use_case.applications.list_events(
+        application_id,
+        offset=offset,
+        limit=limit,
+    )
+    return ApplicationEventPage(
+        items=[ApplicationEventRead.model_validate(item) for item in items],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.post(
@@ -216,6 +354,28 @@ def list_tasks(
         TaskRead.model_validate(item)
         for item in use_case.tasks.list(offset=offset, limit=limit)
     ]
+
+
+@router.get("/tasks/query", response_model=TaskPage, tags=["tasks"])
+def query_tasks(
+    use_case: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
+    application_id: int | None = Query(default=None, gt=0),
+    task_status: TaskStatusFilter = None,
+) -> TaskPage:
+    items, total = use_case.tasks.query(
+        offset=offset,
+        limit=limit,
+        application_id=application_id,
+        status=task_status,
+    )
+    return TaskPage(
+        items=[TaskRead.model_validate(item) for item in items],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.post(

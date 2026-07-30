@@ -8,6 +8,7 @@ import { getApiErrorMessage } from '@/api/http'
 import { stageMeta, taskStatusMeta, taskTypeMeta } from '@/utils/dictionaries'
 import { formatDate, formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
 import type {
+  ApplicationEvent,
   EmailListItem,
   JobApplication,
   JobApplicationCreate,
@@ -26,6 +27,8 @@ const stageFilter = ref('')
 const drawerVisible = ref(false)
 const createVisible = ref(false)
 const selected = ref<JobApplication | null>(null)
+const applicationEvents = ref<ApplicationEvent[]>([])
+const loadingEvents = ref(false)
 const saving = ref(false)
 const createFormRef = ref<FormInstance>()
 
@@ -119,7 +122,7 @@ async function loadData() {
   }
 }
 
-function openApplication(application: JobApplication) {
+async function openApplication(application: JobApplication) {
   selected.value = application
   Object.assign(editForm, {
     company_name: application.company_name,
@@ -131,6 +134,15 @@ function openApplication(application: JobApplication) {
     notes: application.notes ?? '',
   })
   drawerVisible.value = true
+  loadingEvents.value = true
+  try {
+    applicationEvents.value = (await applicationApi.events(application.id)).items
+  } catch (error) {
+    applicationEvents.value = []
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    loadingEvents.value = false
+  }
 }
 
 async function saveApplication() {
@@ -384,6 +396,28 @@ onMounted(loadData)
               </RouterLink>
               <div v-if="relatedEmails(selected.id).length === 0" class="drawer-empty">
                 暂无关联邮件
+              </div>
+            </div>
+          </ElTabPane>
+
+          <ElTabPane :label="`时间线 ${applicationEvents.length}`">
+            <div v-loading="loadingEvents" class="record-list">
+              <div v-for="event in applicationEvents" :key="event.id" class="record-row">
+                <span class="record-dot" />
+                <div>
+                  <strong>{{ event.event_type }}</strong>
+                  <span>
+                    {{
+                      event.confirmed_stage
+                        ? `${event.previous_stage ? stageLabel(event.previous_stage) : '未设置'} → ${stageLabel(event.confirmed_stage)}`
+                        : event.raw_time_text || '已记录申请事件'
+                    }}
+                  </span>
+                </div>
+                <time>{{ formatDateTime(event.event_at || event.created_at) }}</time>
+              </div>
+              <div v-if="!loadingEvents && applicationEvents.length === 0" class="drawer-empty">
+                暂无申请时间线事件
               </div>
             </div>
           </ElTabPane>

@@ -16,9 +16,11 @@ from app.application.schemas import (
     ApplicationMatchResponse,
     ReviewDecision,
     ReviewDecisionResponse,
+    ReviewTaskPage,
     ReviewTaskRead,
 )
 from app.core.config import Settings, get_settings
+from app.domain.enums import ReviewActionType, ReviewTaskStatus
 from app.infrastructure.db.session import get_db_session
 from app.infrastructure.llm import create_chat_model
 
@@ -85,6 +87,34 @@ def list_review_tasks(
         ReviewTaskRead.model_validate(item)
         for item in use_case.list(offset=offset, limit=limit)
     ]
+
+
+@router.get(
+    "/review-tasks/query",
+    response_model=ReviewTaskPage,
+    tags=["review-tasks"],
+)
+def query_review_tasks(
+    use_case: ReviewDependency,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    task_status: Annotated[
+        ReviewTaskStatus | None, Query(alias="status")
+    ] = None,
+    action_type: ReviewActionType | None = None,
+) -> ReviewTaskPage:
+    items, total = use_case.query(
+        offset=offset,
+        limit=limit,
+        status=task_status,
+        action_type=action_type,
+    )
+    return ReviewTaskPage(
+        items=[ReviewTaskRead.model_validate(item) for item in items],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.get(

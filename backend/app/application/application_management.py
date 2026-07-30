@@ -426,6 +426,34 @@ class ReviewTaskService:
             )
         )
 
+    def query(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: ReviewTaskStatus | None = None,
+        action_type: ReviewActionType | None = None,
+    ) -> tuple[list[ReviewTask], int]:
+        conditions = [ReviewTask.user_id == self._user_id]
+        if status is not None:
+            conditions.append(ReviewTask.status == status)
+        if action_type is not None:
+            conditions.append(ReviewTask.action_type == action_type)
+        total = int(
+            self._session.scalar(
+                select(func.count(ReviewTask.id)).where(*conditions)
+            )
+            or 0
+        )
+        statement = (
+            select(ReviewTask)
+            .where(*conditions)
+            .order_by(ReviewTask.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(self._session.scalars(statement)), total
+
     def get(self, task_id: str, *, for_update: bool = False) -> ReviewTask:
         statement = select(ReviewTask).where(
             ReviewTask.id == task_id,

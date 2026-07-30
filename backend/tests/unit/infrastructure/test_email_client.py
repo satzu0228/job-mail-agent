@@ -98,6 +98,25 @@ def test_uidvalidity_change_resets_cursor_and_fetch_is_read_only() -> None:
     assert messages[0].received_at.isoformat() == "2026-07-28T02:00:00"
 
 
+def test_fetch_raw_message_uses_read_only_folder_and_size_limit() -> None:
+    fake = FakeImap()
+    client = ImapMailboxClient(timeout_seconds=5)
+    client._connect = lambda account: fake  # type: ignore[method-assign]
+
+    raw_message = client.fetch_raw_message(
+        _account(),
+        "secret-not-logged",
+        folder="INBOX",
+        uid=2,
+        max_message_bytes=1024,
+    )
+
+    assert fake.readonly is True
+    assert raw_message.startswith(b"Subject: Test")
+    assert ("2", "(RFC822.SIZE)") in fake.fetch_queries
+    assert ("2", "(BODY.PEEK[] INTERNALDATE)") in fake.fetch_queries
+
+
 class FakeSmtp:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error

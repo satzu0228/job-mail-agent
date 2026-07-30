@@ -1,5 +1,6 @@
 import { http } from './http'
 import type {
+  ApplicationEvent,
   EmailAccount,
   EmailAccountCreate,
   EmailConnectionTestResult,
@@ -8,6 +9,7 @@ import type {
   EmailSyncResult,
   JobApplication,
   JobApplicationCreate,
+  Page,
   ReviewDecisionResponse,
   ReviewTask,
   Task,
@@ -18,6 +20,10 @@ export const emailAccountApi = {
   list: () => http.get<EmailAccount[]>('/email-accounts').then(({ data }) => data),
   create: (payload: EmailAccountCreate) =>
     http.post<EmailAccount>('/email-accounts', payload).then(({ data }) => data),
+  setActive: (id: number, is_active: boolean) =>
+    http
+      .patch<EmailAccount>(`/email-accounts/${id}/active`, { is_active })
+      .then(({ data }) => data),
   test: (id: number) =>
     http
       .post<EmailConnectionTestResult>(`/email-accounts/${id}/test-connection`)
@@ -31,7 +37,20 @@ export const emailAccountApi = {
 export const emailApi = {
   list: (limit = 100) =>
     http.get<EmailListItem[]>('/emails', { params: { limit } }).then(({ data }) => data),
+  query: (params: {
+    offset?: number
+    limit?: number
+    account_id?: number
+    keyword?: string
+    application_id?: number
+    linked?: boolean
+    category?: string
+  }) => http.get<Page<EmailListItem>>('/emails/query', { params }).then(({ data }) => data),
   detail: (id: number) => http.get<EmailDetail>(`/emails/${id}`).then(({ data }) => data),
+  downloadAttachment: (emailId: number, attachmentIndex: number) =>
+    http.get<Blob>(`/emails/${emailId}/attachments/${attachmentIndex}`, {
+      responseType: 'blob',
+    }),
   startWorkflow: (id: number) =>
     http.post<WorkflowRun>(`/emails/${id}/workflow-runs`).then(({ data }) => data),
   getWorkflow: (id: string) =>
@@ -47,6 +66,12 @@ export const applicationApi = {
     http.post<JobApplication>('/job-applications', payload).then(({ data }) => data),
   update: (id: number, payload: Partial<JobApplication> & { version: number }) =>
     http.patch<JobApplication>(`/job-applications/${id}`, payload).then(({ data }) => data),
+  events: (id: number, offset = 0, limit = 100) =>
+    http
+      .get<Page<ApplicationEvent>>(`/job-applications/${id}/events`, {
+        params: { offset, limit },
+      })
+      .then(({ data }) => data),
 }
 
 export const taskApi = {
