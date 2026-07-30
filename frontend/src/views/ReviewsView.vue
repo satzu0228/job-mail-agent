@@ -7,6 +7,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { emailApi, reviewApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import {
+  enumValueLabel,
   reviewActionMeta,
   reviewStatusMeta,
   riskMeta,
@@ -123,7 +124,7 @@ async function approve() {
   if (selected.value.action_type === 'SEND_REPLY') {
     try {
       await ElMessageBox.confirm(
-        '批准后系统将通过 SMTP 真实发送这封邮件，且同一幂等键只执行一次。',
+        '批准后系统将通过邮件服务器真实发送这封邮件，且同一请求只执行一次。',
         '确认发送回复',
         {
           confirmButtonText: '确认并发送',
@@ -190,7 +191,9 @@ function payloadSummary(task: ReviewTask): string {
     payload.position_name,
     payload.title,
     payload.subject,
-    payload.proposed_stage,
+    typeof payload.proposed_stage === 'string'
+      ? enumValueLabel(payload.proposed_stage)
+      : payload.proposed_stage,
     payload.application_id,
   ].filter((value) => value !== null && value !== undefined && String(value).trim())
   return values.length ? values.slice(0, 2).join(' · ') : '查看建议内容'
@@ -212,14 +215,59 @@ function fieldLabel(key: string): string {
     meeting_url: '会议链接',
     generated_body: '回复正文',
     reviewed_body: '回复正文',
+    validation: '状态校验',
+    reason: '校验说明',
+    status: '校验结果',
+    previous_stage: '原阶段',
+    schema_version: '数据格式版本',
+    source_review_task_id: '来源审核编号',
+    source_email_id: '来源邮件',
+    workflow_run_id: '工作流编号',
+    task_type: '日程类型',
+    raw_time_text: '原始时间',
+    source_timezone: '来源时区',
+    contact_name: '联系人',
+    contact_email: '联系邮箱',
+    description: '说明',
+    body: '正文',
+    cc_recipients: '抄送人',
   }
-  return labels[key] ?? key
+  return labels[key] ?? '其他信息'
 }
 
-function displayValue(value: unknown): string {
+function displayValue(value: unknown, key = ''): string {
   if (value === null || value === undefined || value === '') return '—'
-  if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>
+          const name = typeof record.name === 'string' ? record.name : ''
+          const address = typeof record.address === 'string' ? record.address : ''
+          if (name || address) return name && address ? `${name}（${address}）` : name || address
+        }
+        return displayValue(item)
+      })
+      .join('、')
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([nestedKey, nestedValue]) => `${fieldLabel(nestedKey)}：${displayValue(nestedValue, nestedKey)}`)
+      .join('\n')
+  }
+  if (typeof value === 'string') {
+    if (key.endsWith('_stage') || key === 'status') return enumValueLabel(value)
+    if (key.endsWith('_at')) return formatDateTime(value)
+  }
   return String(value)
+}
+
+function decisionText(value: string | null): string {
+  const labels: Record<string, string> = {
+    'Controlled interview invitation SMTP acceptance flow': '受控面试邀请邮件发送验收流程',
+  }
+  return value ? labels[value] ?? value : '—'
 }
 
 watch(
@@ -365,21 +413,26 @@ onMounted(loadData)
           <dl class="payload-list">
             <div v-for="(value, key) in selected.proposed_payload" :key="key">
               <dt>{{ fieldLabel(String(key)) }}</dt>
-              <dd>{{ displayValue(value) }}</dd>
+              <dd>{{ displayValue(value, String(key)) }}</dd>
             </div>
           </dl>
         </section>
 
         <section v-if="selected.status === 'PENDING'" class="review-section">
           <h3>确认内容</h3>
-          <p class="section-hint">可以在批准前修改结构化内容；必须保持有效的 JSON 对象。</p>
-          <ElInput
-            v-model="payloadText"
-            type="textarea"
-            :rows="12"
-            resize="vertical"
-            class="payload-editor"
-          />
+          <p class="section-hint">需要调整建议时，可展开高级编辑并修改结构化内容。</p>
+          <ElCollapse class="advanced-editor">
+            <ElCollapseItem title="高级编辑结构化内容" name="payload">
+              <p class="section-hint">字段属于系统接口约定，修改后必须保持有效格式。</p>
+              <ElInput
+                v-model="payloadText"
+                type="textarea"
+                :rows="12"
+                resize="vertical"
+                class="payload-editor"
+              />
+            </ElCollapseItem>
+          </ElCollapse>
           <label class="reason-label" for="decision-reason">审核说明</label>
           <ElInput
             id="decision-reason"
@@ -403,7 +456,7 @@ onMounted(loadData)
             </div>
             <div>
               <dt>处理说明</dt>
-              <dd>{{ selected.decision_reason || '—' }}</dd>
+              <dd>{{ decisionText(selected.decision_reason) }}</dd>
             </div>
           </dl>
         </section>
@@ -633,11 +686,17 @@ onMounted(loadData)
   font-size: 12px;
   background: #f8f9fa;
   border-right: 1px solid var(--jm-border-light);
+  white-space: nowrap;
 }
 
 .payload-list dd,
 .result-list dd {
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.advanced-editor {
+  border-top: 0;
 }
 
 .payload-editor :deep(textarea) {

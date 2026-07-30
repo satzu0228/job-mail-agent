@@ -24,6 +24,15 @@ def test_task_input_requires_timezone_and_a_schedule_value() -> None:
     with pytest.raises(ValidationError):
         TaskCreate(task_type=TaskType.INTERVIEW, title="线上面试")
 
+    interview = TaskCreate(
+        task_type=TaskType.INTERVIEW,
+        interview_round=2,
+        title="二面",
+        start_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+    )
+
+    assert interview.interview_round == 2
+
 
 def test_response_serializes_database_utc_as_aware_iso_value() -> None:
     response = TaskRead(
@@ -32,6 +41,7 @@ def test_response_serializes_database_utc_as_aware_iso_value() -> None:
         application_id=None,
         source_email_id=None,
         task_type=TaskType.DEADLINE,
+        interview_round=None,
         title="提交材料",
         description=None,
         raw_time_text=None,

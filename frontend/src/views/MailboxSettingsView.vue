@@ -6,6 +6,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { emailAccountApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import { formatDateTime } from '@/utils/format'
+import { syncStatusLabels } from '@/utils/dictionaries'
 import {
   applyMailProviderPreset,
   getMailProviderPreset,
@@ -25,6 +26,7 @@ const creating = ref(false)
 const testingId = ref<number | null>(null)
 const syncingId = ref<number | null>(null)
 const activatingId = ref<number | null>(null)
+const syncSettingsId = ref<number | null>(null)
 const testVisible = ref(false)
 const testResult = ref<EmailConnectionTestResult | null>(null)
 const formRef = ref<FormInstance>()
@@ -145,6 +147,38 @@ async function setActive(account: EmailAccount, value: boolean) {
   }
 }
 
+async function setAutoSync(account: EmailAccount, enabled: boolean) {
+  syncSettingsId.value = account.id
+  try {
+    await emailAccountApi.setSyncSettings(
+      account.id,
+      enabled,
+      account.sync_interval_minutes,
+    )
+    ElMessage.success(enabled ? '已开启自动同步' : '已关闭自动同步')
+    await loadAccounts()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+    await loadAccounts()
+  } finally {
+    syncSettingsId.value = null
+  }
+}
+
+async function setSyncInterval(account: EmailAccount, interval: number) {
+  syncSettingsId.value = account.id
+  try {
+    await emailAccountApi.setSyncSettings(account.id, account.auto_sync_enabled, interval)
+    ElMessage.success('同步间隔已更新')
+    await loadAccounts()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+    await loadAccounts()
+  } finally {
+    syncSettingsId.value = null
+  }
+}
+
 onMounted(loadAccounts)
 </script>
 
@@ -153,7 +187,7 @@ onMounted(loadAccounts)
     <div class="settings-intro">
       <div>
         <h2>邮箱账户</h2>
-        <p>系统通过 IMAP 只读同步收件箱，通过 SMTP 发送经你确认的回复。</p>
+        <p>系统通过收件协议只读同步邮件，通过发件协议发送经你确认的回复。</p>
       </div>
       <ElButton type="primary" :icon="Plus" @click="openCreateDialog">添加邮箱</ElButton>
     </div>
@@ -164,7 +198,7 @@ onMounted(loadAccounts)
           <div class="provider-mark">{{ account.provider.slice(0, 2).toUpperCase() }}</div>
           <div>
             <h3>{{ account.email_address_masked }}</h3>
-            <span>{{ account.provider }} 邮箱</span>
+            <span>{{ getMailProviderPreset(account.provider).label }}</span>
           </div>
           <div class="account-active">
             <span>{{ account.is_active ? '当前启用' : '未启用' }}</span>
@@ -178,31 +212,52 @@ onMounted(loadAccounts)
 
         <dl class="connection-grid">
           <div>
-            <dt>IMAP</dt>
+            <dt>收件服务器（IMAP）</dt>
             <dd>{{ account.imap_host }}:{{ account.imap_port }}</dd>
             <span>{{ account.imap_security }}</span>
           </div>
           <div>
-            <dt>SMTP</dt>
+            <dt>发件服务器（SMTP）</dt>
             <dd>{{ account.smtp_host }}:{{ account.smtp_port }}</dd>
             <span>{{ account.smtp_security }}</span>
           </div>
           <div>
             <dt>最近同步</dt>
             <dd>{{ formatDateTime(account.last_sync_at) }}</dd>
-            <span v-if="account.last_synced_uid">最新 UID {{ account.last_synced_uid }}</span>
+            <span v-if="account.last_synced_uid">最新邮件序号 {{ account.last_synced_uid }}</span>
             <span v-else>尚未同步</span>
           </div>
           <div>
             <dt>同步状态</dt>
             <dd :class="{ error: account.last_sync_status === 'FAILED' }">
-              {{ account.last_sync_status || '未运行' }}
+              {{ account.last_sync_status ? syncStatusLabels[account.last_sync_status] || '状态未知' : '未运行' }}
             </dd>
-            <span class="truncate">{{ account.last_sync_error || `UIDVALIDITY ${account.inbox_uid_validity ?? '—'}` }}</span>
+            <span class="truncate">{{ account.last_sync_error || `邮箱同步标识 ${account.inbox_uid_validity ?? '—'}` }}</span>
           </div>
         </dl>
 
         <div class="account-actions">
+          <div class="auto-sync-controls">
+            <span>自动同步</span>
+            <ElSwitch
+              :model-value="account.auto_sync_enabled"
+              :disabled="!account.is_active"
+              :loading="syncSettingsId === account.id"
+              @change="setAutoSync(account, Boolean($event))"
+            />
+            <ElSelect
+              :model-value="account.sync_interval_minutes"
+              :disabled="!account.auto_sync_enabled"
+              class="sync-interval"
+              @change="setSyncInterval(account, Number($event))"
+            >
+              <ElOption :value="5" label="每 5 分钟" />
+              <ElOption :value="10" label="每 10 分钟" />
+              <ElOption :value="15" label="每 15 分钟" />
+              <ElOption :value="30" label="每 30 分钟" />
+              <ElOption :value="60" label="每 60 分钟" />
+            </ElSelect>
+          </div>
           <ElButton
             :icon="Connection"
             :loading="testingId === account.id"
@@ -472,7 +527,23 @@ onMounted(loadAccounts)
 
 .account-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
   justify-content: flex-end;
+}
+
+.auto-sync-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-right: auto;
+  color: var(--jm-text-secondary);
+  font-size: 11px;
+}
+
+.sync-interval {
+  width: 112px;
 }
 
 .account-empty {
@@ -622,6 +693,20 @@ onMounted(loadAccounts)
 }
 
 @media (max-width: 560px) {
+  .account-actions {
+    align-items: stretch;
+  }
+
+  .auto-sync-controls {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .account-actions > .el-button {
+    flex: 1;
+    margin-left: 0;
+  }
+
   .form-grid,
   .protocol-grid {
     grid-template-columns: 1fr;

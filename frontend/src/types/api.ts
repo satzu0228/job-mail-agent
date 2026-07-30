@@ -52,6 +52,7 @@ export type WorkflowRunStatus =
 export interface EmailAccount {
   id: number
   provider: string
+  email_address: string
   email_address_masked: string
   imap_host: string
   imap_port: number
@@ -60,6 +61,10 @@ export interface EmailAccount {
   smtp_port: number
   smtp_security: TransportSecurity
   is_active: boolean
+  auto_sync_enabled: boolean
+  sync_interval_minutes: number
+  next_sync_at: string | null
+  last_auto_sync_at: string | null
   inbox_uid_validity: number | null
   last_synced_uid: number | null
   last_sync_at: string | null
@@ -95,6 +100,7 @@ export interface EmailSyncResult {
   created: number
   skipped: number
   failed: number
+  created_email_ids: number[]
 }
 
 export interface EmailListItem {
@@ -104,6 +110,8 @@ export interface EmailListItem {
   subject: string
   from_name: string | null
   from_address: string
+  to_recipients: Array<Record<string, unknown>>
+  direction: 'RECEIVED' | 'SENT'
   received_at: string | null
   parse_status: 'PENDING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED'
   archive_status: 'NONE' | 'PROPOSED' | 'ARCHIVED' | 'RESTORED' | 'FAILED'
@@ -205,6 +213,7 @@ export interface Task {
   application_id: number | null
   source_email_id: number | null
   task_type: TaskType
+  interview_round: number | null
   title: string
   description: string | null
   raw_time_text: string | null
@@ -215,6 +224,20 @@ export interface Task {
   meeting_url: string | null
   status: TaskStatus
   version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Reminder {
+  id: number
+  user_id: number
+  task_id: number
+  title: string
+  remind_at: string
+  event_at: string
+  status: 'DELIVERED' | 'READ' | 'CANCELLED'
+  delivered_at: string
+  read_at: string | null
   created_at: string
   updated_at: string
 }

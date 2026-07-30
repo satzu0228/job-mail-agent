@@ -134,6 +134,23 @@ class EmailAccessService:
             self._session.flush()
             return account
 
+    def update_sync_settings(
+        self,
+        account_id: int,
+        *,
+        enabled: bool,
+        interval_minutes: int,
+    ) -> EmailAccount:
+        with self._session.begin():
+            account = self.accounts.get(account_id, for_update=True)
+            if enabled and not account.is_active:
+                raise ResourceConflictError("停用的邮箱不能开启自动同步")
+            account.auto_sync_enabled = enabled
+            account.sync_interval_minutes = interval_minutes
+            account.next_sync_at = _utc_now() if enabled else None
+            self._session.flush()
+            return account
+
     def download_attachment(
         self,
         email_id: int,
@@ -220,11 +237,14 @@ class EmailAccessService:
             raise EmailSyncError(str(exc)) from exc
 
         created = skipped = failed = 0
+        created_email_ids: list[int] = []
         for remote in remote_messages:
-            outcome = self._persist_remote(account, uid_validity, remote)
+            outcome, email_id = self._persist_remote(account, uid_validity, remote)
             created += outcome == "created"
             skipped += outcome == "skipped"
             failed += outcome == "failed"
+            if outcome == "created" and email_id is not None:
+                created_email_ids.append(email_id)
 
         account.inbox_uid_validity = uid_validity
         if remote_messages:
@@ -241,6 +261,7 @@ class EmailAccessService:
             created=created,
             skipped=skipped,
             failed=failed,
+            created_email_ids=created_email_ids,
         )
 
     def _persist_remote(
@@ -248,14 +269,14 @@ class EmailAccessService:
         account: EmailAccount,
         uid_validity: int,
         remote: RemoteEmail,
-    ) -> str:
+    ) -> tuple[str, int | None]:
         if self.emails.find_by_imap_identity(
             account_id=account.id,
             source_folder=INBOX,
             uid_validity=uid_validity,
             imap_uid=remote.uid,
         ):
-            return "skipped"
+            return "skipped", None
         try:
             parsed = parse_email(
                 remote.raw_message,
@@ -267,11 +288,13 @@ class EmailAccessService:
                 account_id=account.id,
                 message_id=parsed.message_id,
             ):
-                return "skipped"
+                return "skipped", None
             email = self._email_model(account.id, uid_validity, remote.uid, parsed)
             self.emails.add(email)
             self._session.commit()
-            return "failed" if parsed.parse_status == EmailParseStatus.FAILED else "created"
+            if parsed.parse_status == EmailParseStatus.FAILED:
+                return "failed", email.id
+            return "created", email.id
         except Exception:
             self._session.rollback()
             try:
@@ -295,8 +318,8 @@ class EmailAccessService:
                 self._session.commit()
             except IntegrityError:
                 self._session.rollback()
-                return "skipped"
-            return "failed"
+                return "skipped", None
+            return "failed", None
 
     @staticmethod
     def _email_model(

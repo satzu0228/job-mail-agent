@@ -25,10 +25,12 @@ from app.domain.enums import (
     DecisionSource,
     EmailAnalysisStatus,
     EmailCategory,
+    EmailDirection,
     EmailParseStatus,
     EmailPriority,
     ExecutionStatus,
     ExecutorType,
+    ReminderStatus,
     ReplyDraftStatus,
     ReviewActionType,
     ReviewTaskStatus,
@@ -88,6 +90,7 @@ class EmailAccountCreate(ApiSchema):
 class EmailAccountRead(UtcResponseSchema):
     id: int
     provider: str
+    email_address: str
     email_address_masked: str
     imap_host: str
     imap_port: int
@@ -96,6 +99,10 @@ class EmailAccountRead(UtcResponseSchema):
     smtp_port: int
     smtp_security: TransportSecurity
     is_active: bool
+    auto_sync_enabled: bool
+    sync_interval_minutes: int
+    next_sync_at: datetime | None
+    last_auto_sync_at: datetime | None
     inbox_uid_validity: int | None
     last_synced_uid: int | None
     last_sync_at: datetime | None
@@ -107,6 +114,11 @@ class EmailAccountRead(UtcResponseSchema):
 
 class EmailAccountActiveUpdate(ApiSchema):
     is_active: bool
+
+
+class EmailAccountSyncSettingsUpdate(ApiSchema):
+    enabled: bool
+    interval_minutes: int = Field(default=10, ge=5, le=60)
 
 
 class ConnectionCheck(ApiSchema):
@@ -131,6 +143,7 @@ class EmailSyncResult(ApiSchema):
     created: int
     skipped: int
     failed: int
+    created_email_ids: list[int] = Field(default_factory=list)
 
 
 class EmailAnalyzeResponse(UtcResponseSchema):
@@ -151,6 +164,8 @@ class EmailListItem(UtcResponseSchema):
     subject: str
     from_name: str | None
     from_address: str
+    to_recipients: list[dict[str, Any]]
+    direction: EmailDirection
     received_at: datetime | None
     parse_status: EmailParseStatus
     archive_status: ArchiveStatus
@@ -184,7 +199,6 @@ class EmailAnalysisRead(UtcResponseSchema):
 
 class EmailDetail(EmailListItem):
     message_id: str | None
-    to_recipients: list[dict[str, Any]]
     cc_recipients: list[dict[str, Any]]
     sent_at: datetime | None
     plain_body: str | None
@@ -361,6 +375,7 @@ class TaskCreate(ApiSchema):
     application_id: int | None = Field(default=None, gt=0)
     source_email_id: int | None = Field(default=None, gt=0)
     task_type: TaskType
+    interview_round: int | None = Field(default=None, ge=1, le=20)
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     raw_time_text: str | None = Field(default=None, max_length=500)
@@ -374,11 +389,16 @@ class TaskCreate(ApiSchema):
     def require_schedule_time(self) -> "TaskCreate":
         if self.start_at is None and self.deadline_at is None:
             raise ValueError("task requires start_at or deadline_at")
+        if self.task_type is TaskType.INTERVIEW and self.interview_round is None:
+            raise ValueError("interview task requires interview_round")
+        if self.task_type is not TaskType.INTERVIEW and self.interview_round is not None:
+            raise ValueError("only interview task accepts interview_round")
         return self
 
 
 class TaskUpdate(ApiSchema):
     version: int = Field(gt=0)
+    interview_round: int | None = Field(default=None, ge=1, le=20)
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     start_at: AwareDatetime | None = None
@@ -395,6 +415,7 @@ class TaskRead(UtcResponseSchema):
     application_id: int | None
     source_email_id: int | None
     task_type: TaskType
+    interview_round: int | None
     title: str
     description: str | None
     raw_time_text: str | None
@@ -414,6 +435,24 @@ class TaskPage(ApiSchema):
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1)
+
+
+class ReminderRead(UtcResponseSchema):
+    id: int
+    user_id: int
+    task_id: int
+    title: str
+    remind_at: datetime
+    event_at: datetime
+    status: ReminderStatus
+    delivered_at: datetime
+    read_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReminderReadUpdate(ApiSchema):
+    read: bool = True
 
 
 class ReplyDraftCreate(ApiSchema):

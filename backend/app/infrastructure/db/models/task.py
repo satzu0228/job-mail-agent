@@ -43,6 +43,10 @@ class Task(TimestampMixin, Base):
     task_type: Mapped[TaskType] = mapped_column(
         varchar_enum(TaskType, name="task_type", length=32), nullable=False
     )
+    interview_round: Mapped[int | None] = mapped_column(
+        mysql.SMALLINT(unsigned=True),
+        nullable=True,
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_time_text: Mapped[str | None] = mapped_column(String(500), nullable=True)

@@ -5,8 +5,19 @@ import { computed, onMounted, reactive, ref } from 'vue'
 
 import { applicationApi, emailApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
-import { stageMeta, taskStatusMeta, taskTypeMeta } from '@/utils/dictionaries'
-import { formatDate, formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
+import {
+  eventTypeLabels,
+  stageMeta,
+  taskStatusMeta,
+  taskTypeMeta,
+} from '@/utils/dictionaries'
+import {
+  appliedDateTime,
+  dateInputValue,
+  formatDate,
+  formatDateTime,
+  taskTime,
+} from '@/utils/format'
 import type {
   ApplicationEvent,
   EmailListItem,
@@ -85,6 +96,33 @@ function stageType(stage: JobApplication['current_stage']) {
   return stageMeta[stage].type
 }
 
+function interviewRoundLabel(round: number | null): string {
+  if (!round) return '面试'
+  const numerals = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+  return round <= numerals.length ? `${numerals[round - 1]}面` : `第 ${round} 轮面试`
+}
+
+function interviewTask(applicationId: number): Task | undefined {
+  return relatedTasks(applicationId)
+    .filter((task) => task.task_type === 'INTERVIEW' && task.status !== 'CANCELLED')
+    .sort((a, b) => {
+      const roundDelta = (b.interview_round ?? 0) - (a.interview_round ?? 0)
+      if (roundDelta) return roundDelta
+      return String(taskTime(b)).localeCompare(String(taskTime(a)))
+    })[0]
+}
+
+function applicationStageLabel(application: JobApplication): string {
+  if (application.current_stage !== 'INTERVIEW') return stageLabel(application.current_stage)
+  return interviewRoundLabel(interviewTask(application.id)?.interview_round ?? null)
+}
+
+function taskLabel(task: Task): string {
+  return task.task_type === 'INTERVIEW'
+    ? interviewRoundLabel(task.interview_round)
+    : task.title
+}
+
 function relatedEmails(id: number): EmailListItem[] {
   return emails.value
     .filter((email) => email.application_id === id)
@@ -128,7 +166,7 @@ async function openApplication(application: JobApplication) {
     company_name: application.company_name,
     position_name: application.position_name,
     location: application.location ?? '',
-    applied_at: application.applied_at ?? '',
+    applied_at: dateInputValue(application.applied_at),
     contact_name: application.contact_name ?? '',
     contact_email: application.contact_email ?? '',
     notes: application.notes ?? '',
@@ -154,7 +192,7 @@ async function saveApplication() {
       company_name: editForm.company_name,
       position_name: editForm.position_name,
       location: editForm.location || null,
-      applied_at: editForm.applied_at || null,
+      applied_at: appliedDateTime(editForm.applied_at),
       contact_name: editForm.contact_name || null,
       contact_email: editForm.contact_email || null,
       notes: editForm.notes || null,
@@ -174,7 +212,10 @@ async function createApplication() {
   if (!(await createFormRef.value?.validate())) return
   saving.value = true
   try {
-    await applicationApi.create(createForm)
+    await applicationApi.create({
+      ...createForm,
+      applied_at: appliedDateTime(createForm.applied_at),
+    })
     ElMessage.success('求职申请已创建')
     createVisible.value = false
     Object.assign(createForm, {
@@ -258,10 +299,10 @@ onMounted(loadData)
           min-width="190"
           show-overflow-tooltip
         />
-        <ElTableColumn label="当前阶段" width="110">
+        <ElTableColumn label="当前阶段" width="120">
           <template #default="{ row }">
             <ElTag :type="stageType(row.current_stage)" effect="light">
-              {{ stageLabel(row.current_stage) }}
+              {{ applicationStageLabel(row) }}
             </ElTag>
           </template>
         </ElTableColumn>
@@ -276,8 +317,8 @@ onMounted(loadData)
                 :style="{ background: taskTypeMeta[nextTask(row.id)!.task_type].color }"
               />
               <div>
-                <strong>{{ nextTask(row.id)!.title }}</strong>
-                <span>{{ formatRelativeDate(taskTime(nextTask(row.id)!)) }}</span>
+                <strong>{{ taskLabel(nextTask(row.id)!) }}</strong>
+                <span>{{ formatDateTime(taskTime(nextTask(row.id)!)) }}</span>
               </div>
             </div>
             <span v-else class="quiet">—</span>
@@ -316,10 +357,13 @@ onMounted(loadData)
           <div>
             <span>当前阶段</span>
             <ElTag :type="stageMeta[selected.current_stage].type" effect="light" size="large">
-              {{ stageMeta[selected.current_stage].label }}
+              {{ applicationStageLabel(selected) }}
             </ElTag>
           </div>
-          <p>阶段来自用户确认后的业务状态，不能在此直接修改。</p>
+          <p v-if="interviewTask(selected.id)">
+            面试时间 {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
+          </p>
+          <p v-else>阶段来自用户确认后的业务状态，不能在此直接修改。</p>
         </div>
 
         <ElTabs>
@@ -338,9 +382,9 @@ onMounted(loadData)
                 <ElFormItem label="投递时间">
                   <ElDatePicker
                     v-model="editForm.applied_at"
-                    type="datetime"
-                    value-format="YYYY-MM-DDTHH:mm:ssZ"
-                    placeholder="选择投递时间"
+                    type="date"
+                    value-format="YYYY-MM-DD"
+                    placeholder="选择投递日期"
                   />
                 </ElFormItem>
                 <ElFormItem label="联系人">
@@ -367,7 +411,7 @@ onMounted(loadData)
                   :style="{ borderColor: taskTypeMeta[task.task_type].color }"
                 />
                 <div>
-                  <strong>{{ task.title }}</strong>
+                  <strong>{{ taskLabel(task) }}</strong>
                   <span>{{ formatDateTime(taskTime(task)) }} · {{ taskTypeMeta[task.task_type].label }}</span>
                 </div>
                 <ElTag :type="taskStatusMeta[task.status].type" effect="plain" size="small">
@@ -405,7 +449,7 @@ onMounted(loadData)
               <div v-for="event in applicationEvents" :key="event.id" class="record-row">
                 <span class="record-dot" />
                 <div>
-                  <strong>{{ event.event_type }}</strong>
+                  <strong>{{ eventTypeLabels[event.event_type] || '申请事件' }}</strong>
                   <span>
                     {{
                       event.confirmed_stage
@@ -440,9 +484,9 @@ onMounted(loadData)
           <ElFormItem label="投递时间">
             <ElDatePicker
               v-model="createForm.applied_at"
-              type="datetime"
-              value-format="YYYY-MM-DDTHH:mm:ssZ"
-              placeholder="选择投递时间"
+              type="date"
+              value-format="YYYY-MM-DD"
+              placeholder="选择投递日期"
             />
           </ElFormItem>
           <ElFormItem label="联系人">
@@ -584,11 +628,12 @@ onMounted(loadData)
 }
 
 .drawer-stage p {
-  max-width: 240px;
   margin: 0;
+  margin-left: auto;
   color: var(--jm-text-tertiary);
   font-size: 11px;
   text-align: right;
+  white-space: nowrap;
 }
 
 .drawer-form {
@@ -680,6 +725,18 @@ onMounted(loadData)
 }
 
 @media (max-width: 560px) {
+  .drawer-stage {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .drawer-stage p {
+    margin-left: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
   .form-grid {
     grid-template-columns: 1fr;
   }

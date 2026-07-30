@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  ArrowLeft,
   Connection,
   Document,
   Download,
@@ -16,7 +17,12 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { emailAccountApi, emailApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
-import { categoryMeta, priorityMeta } from '@/utils/dictionaries'
+import {
+  analysisFieldLabel,
+  categoryMeta,
+  priorityMeta,
+  workflowStatusLabels,
+} from '@/utils/dictionaries'
 import { formatDateTime, recipientText } from '@/utils/format'
 import type { EmailAccount, EmailDetail, EmailListItem, WorkflowRun } from '@/types/api'
 
@@ -27,7 +33,8 @@ const emails = ref<EmailListItem[]>([])
 const accounts = ref<EmailAccount[]>([])
 const selectedAccountId = ref<number | null>(null)
 const selectedEmail = ref<EmailDetail | null>(null)
-const activeFilter = ref<'all' | 'linked' | 'unlinked'>('all')
+const directionFilter = ref<'RECEIVED' | 'SENT'>('RECEIVED')
+const linkFilter = ref<'all' | 'linked' | 'unlinked'>('all')
 const activeDetailTab = ref('content')
 const keyword = ref('')
 const loadingList = ref(false)
@@ -41,8 +48,9 @@ const filteredEmails = computed(() => {
   const normalized = keyword.value.trim().toLowerCase()
   return emails.value.filter((email) => {
     if (selectedAccountId.value && email.account_id !== selectedAccountId.value) return false
-    if (activeFilter.value === 'linked' && !email.application_id) return false
-    if (activeFilter.value === 'unlinked' && email.application_id) return false
+    if (email.direction !== directionFilter.value) return false
+    if (linkFilter.value === 'linked' && !email.application_id) return false
+    if (linkFilter.value === 'unlinked' && email.application_id) return false
     if (!normalized) return true
     return [email.subject, email.from_name, email.from_address]
       .filter(Boolean)
@@ -50,7 +58,51 @@ const filteredEmails = computed(() => {
   })
 })
 
+const directionCounts = computed(() => {
+  const accountEmails = emails.value.filter(
+    (email) => !selectedAccountId.value || email.account_id === selectedAccountId.value,
+  )
+  return {
+    RECEIVED: accountEmails.filter((email) => email.direction === 'RECEIVED').length,
+    SENT: accountEmails.filter((email) => email.direction === 'SENT').length,
+  }
+})
+
 const selectedId = computed(() => Number(route.params.emailId) || null)
+const missingFieldLabels = computed(() => {
+  const fields = selectedEmail.value?.current_analysis?.missing_fields ?? []
+  return [...new Set(fields.map(analysisFieldLabel))]
+})
+const emailHtmlDocument = computed(() => {
+  const html = selectedEmail.value?.html_sanitized
+  if (!html) return ''
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; form-action 'none'; base-uri 'none'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root { color-scheme: light; }
+      html, body { min-height: 100%; margin: 0; background: #fff; }
+      body {
+        color: #25272b;
+        font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-size: 14px;
+        line-height: 1.75;
+        overflow-wrap: anywhere;
+      }
+      img { max-width: 100%; height: auto; }
+      table { max-width: 100%; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>${html}</body>
+</html>`
+})
 
 async function loadBaseData() {
   loadingList.value = true
@@ -64,8 +116,10 @@ async function loadBaseData() {
     selectedAccountId.value ??= accountRows.find((account) => account.is_active)?.id ?? null
 
     const routeId = selectedId.value
+    const routeEmail = emailRows.find((email) => email.id === routeId)
+    if (routeEmail) directionFilter.value = routeEmail.direction
     const firstId =
-      routeId && emailRows.some((email) => email.id === routeId)
+      routeEmail
         ? routeId
         : filteredEmails.value[0]?.id
     if (firstId) await selectEmail(firstId, false)
@@ -74,6 +128,22 @@ async function loadBaseData() {
   } finally {
     loadingList.value = false
   }
+}
+
+function selectFirstFilteredEmail() {
+  const first = filteredEmails.value[0]
+  if (first) {
+    void selectEmail(first.id)
+    return
+  }
+  selectedEmail.value = null
+  workflow.value = null
+  void router.replace('/mail')
+}
+
+function setDirection(direction: 'RECEIVED' | 'SENT') {
+  directionFilter.value = direction
+  selectFirstFilteredEmail()
 }
 
 async function selectEmail(id: number, updateRoute = true) {
@@ -134,6 +204,12 @@ function openReview() {
   void router.push(taskId ? `/reviews/${taskId}` : '/reviews')
 }
 
+function closeMobileDetail() {
+  selectedEmail.value = null
+  workflow.value = null
+  void router.replace('/mail')
+}
+
 function attachmentName(item: Record<string, unknown>, index: number): string {
   return String(item.filename ?? item.name ?? `附件 ${index + 1}`)
 }
@@ -177,11 +253,12 @@ onMounted(loadBaseData)
             class="account-select"
             placeholder="选择邮箱"
             :disabled="accounts.length === 0"
+            @change="selectFirstFilteredEmail"
           >
             <ElOption
               v-for="account in accounts"
               :key="account.id"
-              :label="account.email_address_masked"
+              :label="account.email_address"
               :value="account.id"
             />
           </ElSelect>
@@ -193,22 +270,39 @@ onMounted(loadBaseData)
           />
         </div>
 
-        <ElInput v-model="keyword" clearable :prefix-icon="Search" placeholder="搜索主题或发件人" />
-
-        <div class="filter-tabs" role="tablist" aria-label="邮件筛选">
+        <div class="direction-tabs" role="tablist" aria-label="邮件方向">
           <button
             v-for="item in [
-              { value: 'all', label: '全部' },
-              { value: 'linked', label: '已关联' },
-              { value: 'unlinked', label: '待关联' },
+              { value: 'RECEIVED', label: '收件' },
+              { value: 'SENT', label: '已发送' },
             ]"
             :key="item.value"
             type="button"
-            :class="{ active: activeFilter === item.value }"
-            @click="activeFilter = item.value as typeof activeFilter"
+            :class="{ active: directionFilter === item.value }"
+            @click="setDirection(item.value as 'RECEIVED' | 'SENT')"
           >
             {{ item.label }}
+            <span>{{ directionCounts[item.value as 'RECEIVED' | 'SENT'] }}</span>
           </button>
+        </div>
+
+        <div class="search-row">
+          <ElInput
+            v-model="keyword"
+            clearable
+            :prefix-icon="Search"
+            :placeholder="directionFilter === 'RECEIVED' ? '搜索收件' : '搜索已发送'"
+          />
+          <ElSelect
+            v-model="linkFilter"
+            class="link-filter"
+            aria-label="关联状态"
+            @change="selectFirstFilteredEmail"
+          >
+            <ElOption label="全部状态" value="all" />
+            <ElOption label="已关联" value="linked" />
+            <ElOption label="待关联" value="unlinked" />
+          </ElSelect>
         </div>
       </div>
 
@@ -222,7 +316,13 @@ onMounted(loadBaseData)
           @click="selectEmail(email.id)"
         >
           <div class="mail-row-head">
-            <strong class="truncate">{{ email.from_name || email.from_address }}</strong>
+            <strong class="truncate">
+              {{
+                email.direction === 'SENT'
+                  ? `发给 ${email.to_recipients.map(recipientText).join('，') || '未知收件人'}`
+                  : email.from_name || email.from_address
+              }}
+            </strong>
             <time>{{ formatDateTime(email.received_at).slice(5) }}</time>
           </div>
           <div class="mail-subject truncate">{{ email.subject || '（无主题）' }}</div>
@@ -239,9 +339,18 @@ onMounted(loadBaseData)
 
         <div v-if="!loadingList && filteredEmails.length === 0" class="empty-state">
           <div>
-            <p>没有符合条件的邮件</p>
-            <ElButton v-if="accounts.length" type="primary" plain @click="syncAccount">
-              同步收件箱
+            <p>
+              {{
+                directionFilter === 'SENT'
+                  ? '当前已同步邮件中没有已发送记录'
+                  : '没有符合条件的收件'
+              }}
+            </p>
+            <span v-if="directionFilter === 'SENT' && accounts.length" class="quiet">
+              这里显示由当前邮箱地址发出的邮件
+            </span>
+            <ElButton v-else-if="accounts.length" type="primary" plain @click="syncAccount">
+              同步收件
             </ElButton>
             <ElButton v-else type="primary" plain @click="router.push('/settings/mailboxes')">
               添加邮箱
@@ -254,6 +363,15 @@ onMounted(loadBaseData)
     <section v-loading="loadingDetail" class="mail-detail-pane">
       <template v-if="selectedEmail">
         <header class="detail-header">
+          <ElButton
+            class="mobile-back"
+            text
+            :icon="ArrowLeft"
+            aria-label="返回邮件列表"
+            @click="closeMobileDetail"
+          >
+            返回邮件列表
+          </ElButton>
           <div class="detail-title">
             <h2>{{ selectedEmail.subject || '（无主题）' }}</h2>
             <div class="sender-line">
@@ -267,7 +385,7 @@ onMounted(loadBaseData)
           </div>
 
           <div v-if="selectedEmail.current_analysis" class="analysis-strip">
-            <div class="ai-label"><span /> AI 分析</div>
+            <div class="ai-label"><span /> 智能分析</div>
             <ElTag
               :type="categoryMeta[selectedEmail.current_analysis.category].type"
               effect="light"
@@ -292,21 +410,27 @@ onMounted(loadBaseData)
 
         <ElTabs v-model="activeDetailTab" class="detail-tabs">
           <ElTabPane label="邮件内容" name="content">
-            <div class="tab-scroll">
+            <div
+              class="tab-scroll"
+              :class="{ 'html-email-scroll': Boolean(selectedEmail.html_sanitized) }"
+            >
               <div class="recipient-row">
                 <span>收件人</span>
                 <span>{{ selectedEmail.to_recipients.map(recipientText).join('，') || '—' }}</span>
               </div>
-              <div
+              <iframe
                 v-if="selectedEmail.html_sanitized"
-                class="email-html"
-                v-html="selectedEmail.html_sanitized"
+                class="email-frame"
+                :srcdoc="emailHtmlDocument"
+                title="邮件正文"
+                sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                referrerpolicy="no-referrer"
               />
               <pre v-else class="email-plain">{{ selectedEmail.plain_body || '邮件正文为空' }}</pre>
             </div>
           </ElTabPane>
 
-          <ElTabPane label="AI 分析" name="analysis">
+          <ElTabPane label="智能分析" name="analysis">
             <div class="tab-scroll analysis-content">
               <template v-if="selectedEmail.current_analysis">
                 <div class="analysis-grid">
@@ -354,7 +478,7 @@ onMounted(loadBaseData)
                 >
                   <h3>待确认信息</h3>
                   <div class="chip-list">
-                    <span v-for="field in selectedEmail.current_analysis.missing_fields" :key="field">
+                    <span v-for="field in missingFieldLabels" :key="field">
                       {{ field }}
                     </span>
                   </div>
@@ -371,10 +495,8 @@ onMounted(loadBaseData)
               </template>
               <div v-else class="empty-state">
                 <div>
-                  <p>这封邮件还没有 AI 分析结果</p>
-                  <ElButton type="primary" :loading="processing" @click="startWorkflow">
-                    启动智能处理
-                  </ElButton>
+                  <p>这封邮件还没有智能分析结果</p>
+                  <span class="quiet">可使用页面底部的按钮开始处理</span>
                 </div>
               </div>
             </div>
@@ -413,13 +535,7 @@ onMounted(loadBaseData)
           <div v-if="workflow" class="workflow-status">
             <ElIcon :class="{ spinning: processing }"><component :is="processing ? Loading : Connection" /></ElIcon>
             <span>
-              {{
-                workflow.status === 'WAITING_REVIEW'
-                  ? '等待人工审核'
-                  : workflow.status === 'SUCCEEDED'
-                    ? '处理完成'
-                    : workflow.status
-              }}
+              {{ workflowStatusLabels[workflow.status] || '状态未知' }}
             </span>
           </div>
           <span v-else />
@@ -432,7 +548,12 @@ onMounted(loadBaseData)
             >
               前往审核
             </ElButton>
-            <ElButton type="primary" :loading="processing" @click="startWorkflow">
+            <ElButton
+              v-if="!workflow?.pending_review_task_id"
+              type="primary"
+              :loading="processing"
+              @click="startWorkflow"
+            >
               {{ selectedEmail.current_analysis ? '重新智能处理' : '启动智能处理' }}
             </ElButton>
           </div>
@@ -452,7 +573,7 @@ onMounted(loadBaseData)
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: clamp(360px, 32%, 520px) minmax(0, 1fr);
   background: #fff;
 }
 
@@ -466,6 +587,7 @@ onMounted(loadBaseData)
 
 .mail-controls {
   display: grid;
+  min-width: 0;
   gap: 12px;
   padding: 16px;
   border-bottom: 1px solid var(--jm-border-light);
@@ -481,13 +603,22 @@ onMounted(loadBaseData)
   flex: 1;
 }
 
-.filter-tabs {
+.direction-tabs {
   display: flex;
-  gap: 4px;
+  gap: 6px;
+  padding: 3px;
+  background: #f1f3f5;
+  border-radius: 7px;
 }
 
-.filter-tabs button {
-  padding: 6px 10px;
+.direction-tabs button {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
   color: var(--jm-text-secondary);
   font-size: 13px;
   background: transparent;
@@ -496,22 +627,63 @@ onMounted(loadBaseData)
   cursor: pointer;
 }
 
-.filter-tabs button:hover,
-.filter-tabs button.active {
+.direction-tabs button:hover {
+  color: #245bdb;
+}
+
+.direction-tabs button.active {
+  color: #245bdb;
+  font-weight: 500;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(31 35 41 / 10%);
+}
+
+.direction-tabs span {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  color: var(--jm-text-tertiary);
+  font-size: 10px;
+  line-height: 18px;
+  background: rgb(143 149 158 / 12%);
+  border-radius: 9px;
+}
+
+.direction-tabs button.active span {
   color: #245bdb;
   background: var(--jm-primary-soft);
 }
 
+.search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.search-row > .el-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.link-filter {
+  width: 108px;
+  flex: 0 0 108px;
+}
+
 .mail-list {
+  min-width: 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
 .mail-row {
   display: grid;
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
   gap: 7px;
   padding: 14px 16px;
+  overflow: hidden;
   color: inherit;
   text-align: left;
   background: #fff;
@@ -531,12 +703,15 @@ onMounted(loadBaseData)
 
 .mail-row-head {
   display: flex;
+  min-width: 0;
   gap: 10px;
   align-items: baseline;
   justify-content: space-between;
 }
 
 .mail-row-head strong {
+  min-width: 0;
+  flex: 1;
   font-size: 14px;
 }
 
@@ -547,12 +722,15 @@ onMounted(loadBaseData)
 }
 
 .mail-subject {
+  min-width: 0;
+  max-width: 100%;
   font-size: 13px;
   color: var(--jm-text-secondary);
 }
 
 .mail-meta {
   display: flex;
+  min-width: 0;
   gap: 10px;
   align-items: center;
   color: var(--jm-text-tertiary);
@@ -579,7 +757,13 @@ onMounted(loadBaseData)
 }
 
 .detail-header {
+  min-width: 0;
   padding: 20px 24px 0;
+  overflow: hidden;
+}
+
+.mobile-back {
+  display: none;
 }
 
 .detail-title h2 {
@@ -587,10 +771,12 @@ onMounted(loadBaseData)
   font-size: 20px;
   font-weight: 600;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .sender-line {
   display: flex;
+  min-width: 0;
   gap: 10px;
   align-items: center;
 }
@@ -614,22 +800,31 @@ onMounted(loadBaseData)
 }
 
 .sender-line strong {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sender-line span {
+  overflow: hidden;
   color: var(--jm-text-tertiary);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sender-line time {
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--jm-text-tertiary);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .analysis-strip {
   display: flex;
+  min-width: 0;
   min-height: 44px;
   gap: 8px;
   align-items: center;
@@ -643,8 +838,17 @@ onMounted(loadBaseData)
 .analysis-strip p {
   min-width: 0;
   margin: 0 0 0 2px;
+  overflow: hidden;
   color: var(--jm-text-secondary);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.analysis-strip p.truncate {
+  display: -webkit-box;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .analysis-strip.empty-analysis {
@@ -670,8 +874,10 @@ onMounted(loadBaseData)
 }
 
 .detail-tabs {
+  min-width: 0;
   min-height: 0;
   margin-top: 6px;
+  overflow: hidden;
 }
 
 .detail-tabs :deep(.el-tabs__header) {
@@ -681,6 +887,7 @@ onMounted(loadBaseData)
 
 .detail-tabs :deep(.el-tabs__content),
 .detail-tabs :deep(.el-tab-pane) {
+  min-width: 0;
   height: 100%;
   min-height: 0;
 }
@@ -690,13 +897,24 @@ onMounted(loadBaseData)
 }
 
 .tab-scroll {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
   height: 100%;
   padding: 20px 24px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.html-email-scroll {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .recipient-row {
   display: flex;
+  min-width: 0;
   gap: 14px;
   margin-bottom: 18px;
   padding-bottom: 12px;
@@ -706,21 +924,30 @@ onMounted(loadBaseData)
 }
 
 .recipient-row span:first-child {
+  flex: 0 0 auto;
   color: var(--jm-text-tertiary);
 }
 
-.email-html {
-  max-width: 860px;
-  color: #25272b;
-  font-size: 14px;
-  line-height: 1.75;
+.recipient-row span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.email-html :deep(img) {
-  max-width: 100%;
+.email-frame {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  background: #fff;
+  border: 0;
 }
 
 .email-plain {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   margin: 0;
   color: #25272b;
   font: inherit;
@@ -728,10 +955,23 @@ onMounted(loadBaseData)
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .analysis-content {
+  width: 100%;
   max-width: 960px;
+}
+
+.mail-list > .empty-state > div {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+}
+
+.mail-list > .empty-state p {
+  margin: 0;
 }
 
 .analysis-grid {
@@ -913,6 +1153,15 @@ onMounted(loadBaseData)
 
   .mail-detail-pane:has(.detail-header) {
     display: grid;
+  }
+
+  .detail-header {
+    padding-top: 12px;
+  }
+
+  .mobile-back {
+    display: inline-flex;
+    margin: 0 0 10px -10px;
   }
 }
 </style>

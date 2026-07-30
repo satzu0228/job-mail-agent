@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
@@ -25,14 +27,27 @@ from app.infrastructure.db.repositories import (
     VersionConflictError,
 )
 from app.infrastructure.llm import LLMConfigurationError
+from app.runtime import create_automation_scheduler
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        scheduler = None
+        if settings.automation_enabled:
+            scheduler = create_automation_scheduler(settings)
+            scheduler.start()
+        yield
+        if scheduler is not None:
+            scheduler.stop()
+
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         debug=settings.debug,
+        lifespan=lifespan,
     )
     application.include_router(api_router, prefix=settings.api_v1_prefix)
 

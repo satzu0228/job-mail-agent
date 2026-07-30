@@ -17,7 +17,7 @@
 
 ## 3. 数据库
 
-- [数据库 ER 设计](database/database-er-design.md)：定义 12 张业务表、关系、约束、
+- [数据库 ER 设计](database/database-er-design.md)：定义 13 张业务表、关系、约束、
   数据流和迁移顺序。
 
 ## 4. 开发计划
@@ -44,6 +44,8 @@
   确定性格式化、三段工作流中断与 SMTP 幂等发送边界。
 - [第九阶段前端进展](phase-9/vue-frontend-progress.md)：Vue 3 核心页面、飞书表格式
   求职进度、邮件/审核/日程/设置交互及真实数据浏览器验收。
+- [第十阶段完成记录](phase-10/automatic-sync-and-reminders-progress.md)：轻量定时同步、
+  新邮件工作流触发、内部提醒持久化与前端提醒交互。
 
 ## 文档职责规则
 

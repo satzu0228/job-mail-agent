@@ -114,6 +114,7 @@ def test_account_activation_and_attachment_download_routes(
 
     assert activation.status_code == 200
     assert activation.json()["is_active"] is True
+    assert activation.json()["email_address"] == "candidate@gmail.com"
     assert activation.json()["email_address_masked"] == "c***@gmail.com"
     assert attachment.status_code == 200
     assert attachment.content == b"%PDF-test"

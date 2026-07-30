@@ -6,6 +6,7 @@ import app.infrastructure.db.models  # noqa: F401
 from app.domain.enums import (
     ApplicationStage,
     ArchiveStatus,
+    EmailDirection,
     EmailParseStatus,
     TaskStatus,
 )
@@ -18,9 +19,10 @@ from app.infrastructure.db.models import (
     ReviewTask,
     Task,
 )
+from app.infrastructure.db.models.email_account import EmailAccount
 
 
-def test_metadata_contains_all_twelve_business_tables() -> None:
+def test_metadata_contains_all_business_tables() -> None:
     assert set(Base.metadata.tables) == {
         "action_executions",
         "application_events",
@@ -31,6 +33,7 @@ def test_metadata_contains_all_twelve_business_tables() -> None:
         "emails",
         "email_analyses",
         "reply_drafts",
+        "reminders",
         "review_tasks",
         "tasks",
         "workflow_runs",
@@ -113,3 +116,24 @@ def test_email_analysis_version_and_workflow_run_are_unique() -> None:
     assert ("email_id", "version") in unique_columns
     assert ("workflow_run_id",) in unique_columns
     assert EmailAnalysis.__table__.c.extraction_confidence.nullable is True
+
+
+def test_each_task_has_at_most_one_internal_reminder() -> None:
+    reminder_uniques = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in Base.metadata.tables["reminders"].constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("task_id",) in reminder_uniques
+
+
+def test_email_direction_uses_the_owning_account_address() -> None:
+    account = EmailAccount(id=2, user_id=1, email_address="candidate@example.com")
+    received = Email(from_address="hr@example.com")
+    sent = Email(from_address="Candidate@Example.com")
+    received.account = account
+    sent.account = account
+
+    assert received.direction is EmailDirection.RECEIVED
+    assert sent.direction is EmailDirection.SENT

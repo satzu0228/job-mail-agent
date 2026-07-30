@@ -57,5 +57,5 @@ def test_basic_api_does_not_expose_critical_state_or_send_actions(
     assert send_paths == {"/api/v1/reply-drafts/{draft_id}/send"}
     account_read = components["EmailAccountRead"]["properties"]
     assert "credential_ref" not in account_read
-    assert "email_address" not in account_read
+    assert "email_address" in account_read
     assert "email_address_masked" in account_read

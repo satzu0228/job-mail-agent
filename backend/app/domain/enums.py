@@ -33,6 +33,11 @@ class EmailParseStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class EmailDirection(StrEnum):
+    RECEIVED = "RECEIVED"
+    SENT = "SENT"
+
+
 class ArchiveStatus(StrEnum):
     NONE = "NONE"
     PROPOSED = "PROPOSED"
@@ -78,6 +83,12 @@ class TaskStatus(StrEnum):
     PENDING = "PENDING"
     CONFIRMED = "CONFIRMED"
     COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class ReminderStatus(StrEnum):
+    DELIVERED = "DELIVERED"
+    READ = "READ"
     CANCELLED = "CANCELLED"
 
 

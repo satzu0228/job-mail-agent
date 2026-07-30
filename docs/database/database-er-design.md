@@ -4,7 +4,7 @@
 > 版本：v1.2
 > 日期：2026-07-27
 > 数据库：MySQL 8.x / InnoDB / `utf8mb4`
-> 规模：12 张核心表
+> 规模：13 张业务表
 
 ## 1. 精简原则
 
@@ -63,7 +63,7 @@ erDiagram
     REVIEW_TASKS o|--o| TASKS : creates
 ```
 
-## 3. 十二张核心表
+## 3. 十三张业务表
 
 | 编号 | 表 | 职责 |
 |---:|---|---|
@@ -79,6 +79,7 @@ erDiagram
 | 10 | `review_tasks` | 建议动作、人工决定或规则批准 |
 | 11 | `action_executions` | 数据库、SMTP、IMAP 归档等最终执行结果 |
 | 12 | `automation_rules` | 低优先级邮件归档规则 |
+| 13 | `reminders` | 到期前已投递/已读的系统内部提醒 |
 
 LangGraph 的 SQLite checkpoint 由框架维护，不计入业务表。
 
@@ -126,6 +127,10 @@ MVP 不实现完整账号系统，只保留一个配置好的演示用户。
 | `smtp_security` | VARCHAR(16) | `SSL/STARTTLS` |
 | `credential_ref` | VARCHAR(128) | 环境变量或密钥引用，不存授权码 |
 | `is_active` | BOOLEAN |  |
+| `auto_sync_enabled` | BOOLEAN | 是否参与定时同步 |
+| `sync_interval_minutes` | SMALLINT UNSIGNED | 5～60 分钟 |
+| `next_sync_at` | DATETIME(6) | 可空、下次抢占时间 |
+| `last_auto_sync_at` | DATETIME(6) | 可空、最近一次自动同步尝试 |
 | `inbox_uid_validity` | BIGINT UNSIGNED | 可空 |
 | `last_synced_uid` | BIGINT UNSIGNED | 可空 |
 | `last_sync_at` | DATETIME(6) | 可空 |
@@ -312,7 +317,26 @@ WITHDRAWN
 
 Vue 日历直接读取 `tasks`，MVP 不建立独立日历表。
 
-### 5.8 `reply_drafts`
+### 5.8 `reminders`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | BIGINT UNSIGNED | PK |
+| `user_id` | BIGINT UNSIGNED | FK → `users.id` |
+| `task_id` | BIGINT UNSIGNED | UNIQUE/FK → `tasks.id` |
+| `title` | VARCHAR(255) | 投递时的任务标题快照 |
+| `remind_at` | DATETIME(6) | 提醒生成时间，UTC |
+| `event_at` | DATETIME(6) | 对应日程时间，UTC |
+| `status` | VARCHAR(16) | `DELIVERED/READ/CANCELLED` |
+| `delivered_at` | DATETIME(6) | 投递时间 |
+| `read_at` | DATETIME(6) | 可空 |
+| `created_at` | DATETIME(6) |  |
+| `updated_at` | DATETIME(6) |  |
+
+每个任务在 MVP 中至多生成一条内部提醒。提醒只表达投递/已读状态，不替代
+`tasks.start_at/deadline_at`，也不产生外部通知。
+
+### 5.9 `reply_drafts`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -338,7 +362,7 @@ Vue 日历直接读取 `tasks`，MVP 不建立独立日历表。
 - 发送必须引用具体草稿 ID 和版本
 - SMTP 层不再次修改正文
 
-### 5.9 `workflow_runs`
+### 5.10 `workflow_runs`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -362,7 +386,7 @@ Vue 日历直接读取 `tasks`，MVP 不建立独立日历表。
 
 `agent_trace` 满足论文展示和问题排查，不为每次 Agent 调用单独建表。若后期需要大规模统计，再拆 `agent_runs`。
 
-### 5.10 `review_tasks`
+### 5.11 `review_tasks`
 
 将“建议动作”和“审核记录”合并，降低表和接口数量。
 
@@ -403,7 +427,7 @@ RESTORE_EMAIL
 
 默认由用户审核。只有用户明确启用的 `automation_rules` 可以对符合阈值的归档动作设置 `decision_source=RULE`。
 
-### 5.11 `action_executions`
+### 5.12 `action_executions`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -427,7 +451,7 @@ RESTORE_EMAIL
 - SMTP `UNKNOWN` 不自动重试
 - IMAP 归档成功后更新 `emails.current_folder`、`previous_folder` 和 `archive_status`，不修改 `source_folder`
 
-### 5.12 `automation_rules`
+### 5.13 `automation_rules`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -548,9 +572,18 @@ tasks.source_review_task_id 外键
 workflow_runs.pending_review_task_id 外键
 ```
 
+### 004：自动同步和内部提醒
+
+状态：已实现，迁移版本 `20260730_0004`。
+
+```text
+email_accounts 自动同步配置字段
+reminders
+```
+
 ## 8. 数据库验收清单
 
-- [x] 12张表可以从空 MySQL 数据库通过 Alembic 创建。
+- [x] 13 张表可以从空 MySQL 数据库通过 Alembic 创建。
 - [x] 最近一个迁移可生成逆依赖顺序正确的降级 SQL。
 - [x] 同一 `(account, source_folder, UIDVALIDITY, UID)` 无法重复插入。
 - [x] 缺失或重复 `Message-ID` 不阻止合法邮件保存。

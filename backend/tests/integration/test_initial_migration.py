@@ -14,10 +14,10 @@ def make_alembic_config() -> Config:
     return config
 
 
-def test_third_migration_is_the_only_head() -> None:
+def test_fifth_migration_is_the_only_head() -> None:
     scripts = ScriptDirectory.from_config(make_alembic_config())
 
-    assert scripts.get_current_head() == "20260728_0003"
+    assert scripts.get_current_head() == "20260730_0005"
 
 
 def test_initial_migration_generates_ordered_mysql_sql() -> None:
@@ -41,6 +41,7 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
         sql.index("CREATE TABLE review_tasks"),
         sql.index("CREATE TABLE action_executions"),
         sql.index("CREATE TABLE automation_rules"),
+        sql.index("CREATE TABLE reminders"),
     ]
 
     assert table_positions == sorted(table_positions)
@@ -52,6 +53,9 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
     assert "fk_tasks_source_review_task_id_review_tasks" in sql
     assert "fk_workflow_runs_pending_review_task_id_review_tasks" in sql
     assert "20260728_0003" in sql
+    assert "20260730_0004" in sql
+    assert "auto_sync_enabled BOOL NOT NULL DEFAULT 0" in sql
+    assert "uq_reminders_task_id" in sql
 
 
 def test_initial_migration_downgrades_in_reverse_dependency_order() -> None:

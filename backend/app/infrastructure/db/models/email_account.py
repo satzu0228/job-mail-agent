@@ -57,6 +57,26 @@ class EmailAccount(TimestampMixin, Base):
         default=True,
         server_default=text("1"),
     )
+    auto_sync_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+    )
+    sync_interval_minutes: Mapped[int] = mapped_column(
+        mysql.SMALLINT(unsigned=True),
+        nullable=False,
+        default=10,
+        server_default=text("10"),
+    )
+    next_sync_at: Mapped[datetime | None] = mapped_column(
+        mysql.DATETIME(fsp=6),
+        nullable=True,
+    )
+    last_auto_sync_at: Mapped[datetime | None] = mapped_column(
+        mysql.DATETIME(fsp=6),
+        nullable=True,
+    )
     inbox_uid_validity: Mapped[int | None] = mapped_column(
         mysql.BIGINT(unsigned=True),
         nullable=True,

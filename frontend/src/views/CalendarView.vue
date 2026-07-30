@@ -4,15 +4,16 @@ import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
-import { applicationApi, taskApi } from '@/api'
+import { applicationApi, reminderApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import { taskStatusMeta, taskTypeMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
-import type { JobApplication, Task, TaskStatus } from '@/types/api'
+import type { JobApplication, Reminder, Task, TaskStatus } from '@/types/api'
 
 type ViewMode = 'list' | 'month'
 
 const tasks = ref<Task[]>([])
+const reminders = ref<Reminder[]>([])
 const applications = ref<JobApplication[]>([])
 const loading = ref(false)
 const viewMode = ref<ViewMode>('list')
@@ -68,16 +69,27 @@ function openTask(task: Task) {
 async function loadData() {
   loading.value = true
   try {
-    const [taskRows, applicationRows] = await Promise.all([
+    const [taskRows, applicationRows, reminderRows] = await Promise.all([
       taskApi.list(),
       applicationApi.list(),
+      reminderApi.list(true),
     ])
     tasks.value = taskRows
     applications.value = applicationRows
+    reminders.value = reminderRows
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function dismissReminder(reminder: Reminder) {
+  try {
+    await reminderApi.setRead(reminder.id)
+    reminders.value = reminders.value.filter((item) => item.id !== reminder.id)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
   }
 }
 
@@ -134,6 +146,15 @@ onMounted(loadData)
         />
       </ElSelect>
     </div>
+
+    <section v-if="reminders.length" class="reminder-strip">
+      <div v-for="reminder in reminders" :key="reminder.id">
+        <span>即将到期</span>
+        <strong>{{ reminder.title }}</strong>
+        <time>{{ formatRelativeDate(reminder.event_at) }}</time>
+        <ElButton text type="primary" @click="dismissReminder(reminder)">知道了</ElButton>
+      </div>
+    </section>
 
     <section v-loading="loading" class="surface calendar-surface">
       <div v-if="viewMode === 'list'" class="schedule-list">
@@ -332,6 +353,43 @@ onMounted(loadData)
 .calendar-surface {
   min-height: 0;
   overflow: auto;
+}
+
+.reminder-strip {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.reminder-strip > div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  color: #8a4b08;
+  background: #fff7e8;
+  border: 1px solid #f5d5a5;
+  border-radius: 7px;
+}
+
+.reminder-strip span,
+.reminder-strip time {
+  font-size: 11px;
+}
+
+.reminder-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--jm-text);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reminder-strip time {
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .schedule-list {

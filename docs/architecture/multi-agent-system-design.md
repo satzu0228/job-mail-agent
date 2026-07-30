@@ -440,7 +440,7 @@ LangGraph interrupt
 
 ## 11. 数据模型
 
-MVP 精简逻辑 ER、12 张表的职责、字段、约束、迁移顺序和验收清单已经收敛，见 `docs/database/database-er-design.md`。
+MVP 精简逻辑 ER、13 张业务表的职责、字段、约束、迁移顺序和验收清单已经收敛，见 `docs/database/database-er-design.md`。
 
 数据模型的核心边界是：
 
@@ -571,7 +571,8 @@ POST   /api/automation-rules
 6. Vue 使用 REST + 状态轮询；
 7. MVP 不启用 LangGraph Store；
 8. 使用确定性 Orchestrator + 四个核心 Agent，不实现 Review Agent 和 LLM Supervisor；
-9. 业务表精简为12张，建议动作与审核合并为 `review_tasks`；
+9. 核心业务表在第三阶段精简为 12 张，建议动作与审核合并为 `review_tasks`；
+   第十阶段仅增加 `reminders` 保存内部提醒投递状态，当前共 13 张；
 10. 低优先级归档由 `automation_rules`、Policy 和 IMAP Executor 完成。
 
 仍待实验阶段确定：

@@ -39,7 +39,7 @@
 | AD-14 | Prompt 与结构化输出 | 版本化 Prompt 文件 + Pydantic Schema |
 | AD-15 | 时间与隐私 | UTC 持久化、保留原文/时区；最小化模型输入和日志 |
 | AD-16 | 测试策略 | 单元、集成、工作流和端到端四层测试 |
-| AD-17 | 数据模型 | 12张核心表，合并过细实体但保留事实/建议/审核/执行边界 |
+| AD-17 | 数据模型 | 13 张业务表，合并过细实体但保留事实/建议/审核/执行边界 |
 
 ### 2.1 用户提供的 LangChain 参考如何落地
 
@@ -159,6 +159,10 @@ SQLAlchemy 官方 MySQL 文档将 PyMySQL 列为推荐方言之一，并提供 `
 - 前端对明确的运行状态接口进行轮询。
 - MVP 不使用 FastAPI `BackgroundTasks` 承载必须可靠恢复的工作流。
 - MVP 不引入 Celery、RQ、Redis 或 RabbitMQ。
+- 第十阶段采用随 FastAPI 生命周期启动的轻量轮询线程；账户的下次执行时间写入
+  MySQL，并通过 `SELECT ... FOR UPDATE SKIP LOCKED` 抢占到期账户。
+- 轮询器只触发现有幂等 IMAP 同步和 LangGraph 工作流。业务结果仍由 MySQL 与
+  加密 checkpoint 保证，进程内线程不保存任务真相。
 
 ### 原因
 
@@ -166,9 +170,9 @@ FastAPI 会把普通 `def` 路由放入线程池，适合调用不支持 `await`
 
 ### 升级条件
 
-只有出现以下情况才重新评估任务队列：
+只有出现以下情况才升级为独立调度器或任务队列：
 
-- 定时同步需要跨进程调度；
+- 部署从本机单实例扩展到多主机；
 - 单次处理量明显超过有界手动同步；
 - 需要多 Worker 抢占、重试或任务限流；
 - 实测请求时长影响演示稳定性。
@@ -195,6 +199,7 @@ FastAPI 会把普通 `def` 路由放入线程池，适合调用不支持 `await`
 /api/v1/reviews
 /api/v1/actions
 /api/v1/automation-rules
+/api/v1/reminders
 ```
 
 ## 8. AD-06：单用户演示边界
@@ -470,7 +475,7 @@ ReviewTask(PENDING)
 
 ## 19. AD-17：精简数据模型
 
-MVP 固定使用12张核心表：
+MVP 使用 13 张业务表：
 
 ```text
 users
@@ -485,6 +490,7 @@ workflow_runs
 review_tasks
 action_executions
 automation_rules
+reminders
 ```
 
 主要合并策略：
@@ -494,6 +500,8 @@ automation_rules
 - 四 Agent 运行轨迹并入 `workflow_runs.agent_trace`；
 - 建议动作和审核决定合并为 `review_tasks`；
 - 邮件通过可空 `application_id` 直接关联一个申请。
+- 内部日历继续复用 `tasks`，仅用 `reminders` 记录已投递与已读状态，不另建
+  `schedules` 或复制日程事实。
 
 字段和约束以 `database-er-design.md` 为准。
 
@@ -502,7 +510,7 @@ automation_rules
 以下事项不阻塞创建项目骨架：
 
 - Qwen 是否作为 MVP 备用模型实际启用；
-- 后期定时同步采用何种调度器；
+- 多主机部署时采用何种独立调度器；
 - SSE 是否替代轮询；
 - 多实例部署时选择何种共享 checkpointer；
 - LangGraph Store 和语义记忆是否进入增强范围；

@@ -11,6 +11,7 @@ import type {
   JobApplicationCreate,
   Page,
   ReviewDecisionResponse,
+  Reminder,
   ReviewTask,
   Task,
   WorkflowRun,
@@ -23,6 +24,13 @@ export const emailAccountApi = {
   setActive: (id: number, is_active: boolean) =>
     http
       .patch<EmailAccount>(`/email-accounts/${id}/active`, { is_active })
+      .then(({ data }) => data),
+  setSyncSettings: (id: number, enabled: boolean, interval_minutes: number) =>
+    http
+      .patch<EmailAccount>(`/email-accounts/${id}/sync-settings`, {
+        enabled,
+        interval_minutes,
+      })
       .then(({ data }) => data),
   test: (id: number) =>
     http
@@ -79,6 +87,17 @@ export const taskApi = {
     http.get<Task[]>('/tasks', { params: { limit } }).then(({ data }) => data),
   update: (id: number, payload: Partial<Task> & { version: number }) =>
     http.patch<Task>(`/tasks/${id}`, payload).then(({ data }) => data),
+}
+
+export const reminderApi = {
+  list: (unreadOnly = false) =>
+    http
+      .get<Reminder[]>('/reminders', { params: { unread_only: unreadOnly, limit: 100 } })
+      .then(({ data }) => data),
+  setRead: (id: number, read = true) =>
+    http
+      .patch<Reminder>(`/reminders/${id}/read`, { read })
+      .then(({ data }) => data),
 }
 
 export const reviewApi = {

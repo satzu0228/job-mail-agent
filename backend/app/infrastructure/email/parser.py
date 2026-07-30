@@ -19,9 +19,11 @@ _ALLOWED_TAGS = {
     "b",
     "blockquote",
     "br",
+    "center",
     "code",
     "div",
     "em",
+    "font",
     "h1",
     "h2",
     "h3",
@@ -32,6 +34,7 @@ _ALLOWED_TAGS = {
     "p",
     "pre",
     "span",
+    "style",
     "strong",
     "table",
     "tbody",
@@ -47,18 +50,89 @@ _SKIP_CONTENT_TAGS = {
     "canvas",
     "embed",
     "form",
-    "head",
     "object",
     "script",
-    "style",
     "svg",
 }
-_GLOBAL_ATTRIBUTES = {"dir", "lang", "title"}
+_GLOBAL_ATTRIBUTES = {"align", "class", "dir", "id", "lang", "style", "title"}
 _TAG_ATTRIBUTES = {
     "a": {"href"},
-    "td": {"colspan", "rowspan"},
-    "th": {"colspan", "rowspan"},
+    "font": {"color", "face", "size"},
+    "table": {"bgcolor", "border", "cellpadding", "cellspacing", "width"},
+    "td": {"bgcolor", "colspan", "height", "rowspan", "valign", "width"},
+    "th": {"bgcolor", "colspan", "height", "rowspan", "valign", "width"},
 }
+_ALLOWED_STYLE_PROPERTIES = {
+    "background",
+    "background-color",
+    "border",
+    "border-bottom",
+    "border-color",
+    "border-left",
+    "border-radius",
+    "border-right",
+    "border-style",
+    "border-top",
+    "border-width",
+    "box-sizing",
+    "color",
+    "display",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "height",
+    "letter-spacing",
+    "line-height",
+    "margin",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "max-height",
+    "max-width",
+    "min-height",
+    "min-width",
+    "padding",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "table-layout",
+    "text-align",
+    "text-decoration",
+    "text-indent",
+    "text-transform",
+    "vertical-align",
+    "white-space",
+    "width",
+    "visibility",
+    "word-break",
+    "word-spacing",
+    "word-wrap",
+}
+_ALLOWED_DISPLAY_VALUES = {
+    "block",
+    "flex",
+    "grid",
+    "inline",
+    "inline-block",
+    "inline-flex",
+    "none",
+    "table",
+    "table-cell",
+    "table-row",
+}
+_DANGEROUS_STYLE_VALUE = re.compile(
+    r"(?:url\s*\(|expression\s*\(|@import|javascript\s*:|"
+    r"https?\s*:|data\s*:|//|-moz-binding|behavior\s*:|"
+    r"-webkit-image-set|image-set\s*\(|[\\<>])",
+    re.IGNORECASE,
+)
 _QUOTE_MARKERS = (
     re.compile(r"^\s*On .+ wrote:\s*$", re.IGNORECASE),
     re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE),
@@ -95,6 +169,7 @@ class _SafeHtmlParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.skip_depth = 0
+        self.style_depth = 0
 
     def handle_starttag(
         self,
@@ -107,6 +182,10 @@ class _SafeHtmlParser(HTMLParser):
             return
         if self.skip_depth or tag == "img" or tag not in _ALLOWED_TAGS:
             return
+        if tag == "style":
+            self.style_depth += 1
+            self.parts.append("<style>")
+            return
         safe_attrs = []
         allowed = _GLOBAL_ATTRIBUTES | _TAG_ATTRIBUTES.get(tag, set())
         for name, value in attrs:
@@ -115,9 +194,15 @@ class _SafeHtmlParser(HTMLParser):
                 continue
             if name == "href" and not _safe_url(value):
                 continue
+            if name == "style":
+                value = _sanitize_style(value)
+                if not value:
+                    continue
             safe_attrs.append(f' {name}="{escape(value, quote=True)}"')
         if tag == "a":
-            safe_attrs.append(' rel="nofollow noopener noreferrer"')
+            safe_attrs.append(
+                ' target="_blank" rel="nofollow noopener noreferrer"'
+            )
         self.parts.append(f"<{tag}{''.join(safe_attrs)}>")
 
     def handle_startendtag(
@@ -134,12 +219,20 @@ class _SafeHtmlParser(HTMLParser):
         if tag in _SKIP_CONTENT_TAGS:
             self.skip_depth = max(0, self.skip_depth - 1)
             return
+        if tag == "style" and self.style_depth:
+            self.style_depth -= 1
+            self.parts.append("</style>")
+            return
         if not self.skip_depth and tag in _ALLOWED_TAGS and tag not in {"br", "hr"}:
             self.parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
-        if not self.skip_depth:
-            self.parts.append(escape(data))
+        if self.skip_depth:
+            return
+        if self.style_depth:
+            self.parts.append(_sanitize_stylesheet(data))
+            return
+        self.parts.append(escape(data))
 
 
 class _HtmlTextParser(HTMLParser):
@@ -168,6 +261,61 @@ def sanitize_html(value: str) -> str:
     sanitizer.feed(value)
     sanitizer.close()
     return "".join(sanitizer.parts).strip()
+
+
+def _sanitize_style(value: str) -> str:
+    """保留邮件排版所需的安全内联样式，拒绝外部资源和越界定位能力。"""
+    without_comments = re.sub(r"/\*.*?\*/", "", value, flags=re.DOTALL)
+    safe_declarations: list[str] = []
+    for declaration in without_comments.split(";"):
+        name, separator, raw_value = declaration.partition(":")
+        if not separator:
+            continue
+        name = name.strip().lower()
+        css_value = raw_value.strip()
+        if (
+            name not in _ALLOWED_STYLE_PROPERTIES
+            or not css_value
+            or len(css_value) > 512
+            or _DANGEROUS_STYLE_VALUE.search(css_value)
+        ):
+            continue
+        if name == "display":
+            display_value = re.sub(
+                r"\s*!important\s*$",
+                "",
+                css_value,
+                flags=re.IGNORECASE,
+            ).strip()
+            if display_value.lower() not in _ALLOWED_DISPLAY_VALUES:
+                continue
+        safe_declarations.append(f"{name}: {css_value}")
+    return "; ".join(safe_declarations)
+
+
+def _sanitize_stylesheet(value: str) -> str:
+    """保留响应式邮件 CSS，同时移除外链资源和非白名单声明。"""
+    stylesheet = re.sub(r"/\*.*?\*/", "", value, flags=re.DOTALL)
+    stylesheet = re.sub(
+        r"@import\b[^;]*(?:;|$)",
+        "",
+        stylesheet,
+        flags=re.IGNORECASE,
+    )
+    stylesheet = re.sub(
+        r"@font-face\s*\{[^{}]*\}",
+        "",
+        stylesheet,
+        flags=re.IGNORECASE,
+    )
+    stylesheet = stylesheet.replace("<", "").replace(">", "")
+
+    declaration_block = re.compile(r"\{([^{}]*)\}")
+
+    def clean_block(match: re.Match[str]) -> str:
+        return "{" + _sanitize_style(match.group(1)) + "}"
+
+    return declaration_block.sub(clean_block, stylesheet)
 
 
 def parse_email(

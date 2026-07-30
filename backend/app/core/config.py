@@ -36,6 +36,9 @@ class Settings(BaseSettings):
         ge=64 * 1024,
         le=50 * 1024 * 1024,
     )
+    automation_enabled: bool = True
+    automation_poll_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
+    reminder_lead_minutes: int = Field(default=60, ge=5, le=24 * 60)
 
     llm_provider: Literal["deepseek", "qwen"] = "deepseek"
     llm_model: str = "deepseek-chat"

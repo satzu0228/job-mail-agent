@@ -7,6 +7,7 @@ from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.job_application import JobApplication
+from app.infrastructure.db.models.reminder import Reminder
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
 from app.infrastructure.db.models.task import Task
@@ -22,6 +23,7 @@ __all__ = [
     "EmailAnalysis",
     "JobApplication",
     "ReplyDraft",
+    "Reminder",
     "ReviewTask",
     "Task",
     "User",

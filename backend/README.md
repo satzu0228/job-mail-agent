@@ -1,7 +1,7 @@
 # Backend
 
 正式系统的 FastAPI 后端。当前已建立应用入口、版本化路由、配置、SQLAlchemy
-Session、Alembic 环境和基础测试，并完成 12 张核心业务表与三批迁移。邮件查询、
+Session、Alembic 环境和基础测试，并完成 13 张业务表与四批迁移。邮件查询、
 求职记录、任务和回复草稿基础 API 已建立；关键申请阶段、草稿批准和外部动作仍
 必须通过后续审核流程，普通 PATCH 不提供绕过入口。Classification 与 Extraction
 的版本化 Pydantic Schema、Prompt、正式 Agent 和 DeepSeek 模型适配已经建立。

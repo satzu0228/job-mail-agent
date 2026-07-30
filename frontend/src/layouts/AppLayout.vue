@@ -12,12 +12,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { reviewApi } from '@/api'
+import { reminderApi, reviewApi } from '@/api'
 
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
 const pendingCount = ref(0)
+const reminderCount = ref(0)
 let pollTimer: number | undefined
 
 interface NavItem {
@@ -46,10 +47,15 @@ const pageTitle = computed(() => String(route.meta.title ?? '求职邮迹'))
 
 async function loadPendingCount() {
   try {
-    const tasks = await reviewApi.list()
+    const [tasks, reminders] = await Promise.all([
+      reviewApi.list(),
+      reminderApi.list(true),
+    ])
     pendingCount.value = tasks.filter((task) => task.status === 'PENDING').length
+    reminderCount.value = reminders.length
   } catch {
     pendingCount.value = 0
+    reminderCount.value = 0
   }
 }
 
@@ -83,7 +89,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="!collapsed" class="brand-copy">
           <strong>求职邮迹</strong>
-          <small>Job Mail Agent</small>
+          <small>求职邮件助手</small>
         </div>
       </div>
 
@@ -128,6 +134,15 @@ onBeforeUnmount(() => {
     <section class="app-main">
       <header class="topbar">
         <h1>{{ pageTitle }}</h1>
+        <button
+          v-if="reminderCount"
+          class="review-reminder"
+          type="button"
+          @click="navigate('/calendar')"
+        >
+          <span class="status-dot" />
+          <span>{{ reminderCount }} 项日程提醒</span>
+        </button>
         <button class="review-reminder" type="button" @click="navigate('/reviews')">
           <span class="status-dot" :class="{ quiet: pendingCount === 0 }" />
           <span>{{ pendingCount ? `${pendingCount} 项待审核` : '暂无待审核' }}</span>
@@ -286,31 +301,52 @@ onBeforeUnmount(() => {
 }
 
 .sidebar-footer {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
   margin-top: auto;
   padding: 10px;
   border-top: 1px solid var(--jm-border-light);
 }
 
+.sidebar-footer > .nav-item {
+  min-width: 0;
+  flex: 1;
+  padding: 0 10px;
+}
+
 .collapse-button {
   display: grid;
-  width: 32px;
-  height: 30px;
-  margin-left: auto;
+  width: 34px;
+  height: 40px;
+  flex: 0 0 34px;
   color: var(--jm-text-tertiary);
   background: transparent;
-  border: 0;
-  border-radius: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
   place-items: center;
 }
 
 .collapse-button:hover {
+  color: var(--jm-text-secondary);
   background: #f5f6f7;
+  border-color: var(--jm-border-light);
+}
+
+.is-collapsed .sidebar-footer {
+  display: grid;
+  gap: 4px;
+}
+
+.is-collapsed .sidebar-footer > .nav-item {
+  width: 100%;
+  padding: 0;
 }
 
 .is-collapsed .collapse-button {
+  width: 32px;
+  height: 30px;
   margin: 0 auto;
 }
 

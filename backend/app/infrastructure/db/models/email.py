@@ -7,7 +7,7 @@ from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import ArchiveStatus, EmailParseStatus
+from app.domain.enums import ArchiveStatus, EmailDirection, EmailParseStatus
 from app.infrastructure.db.base import (
     MYSQL_TABLE_OPTIONS,
     Base,
@@ -116,4 +116,13 @@ class Email(TimestampMixin, Base):
         return next(
             (analysis for analysis in reversed(self.analyses) if analysis.is_current),
             None,
+        )
+
+    @property
+    def direction(self) -> EmailDirection:
+        account_address = self.account.email_address if self.account is not None else ""
+        return (
+            EmailDirection.SENT
+            if self.from_address.strip().casefold() == account_address.strip().casefold()
+            else EmailDirection.RECEIVED
         )

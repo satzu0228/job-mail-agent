@@ -8,6 +8,14 @@ export function formatDate(value: string | null | undefined): string {
   return value ? dayjs(value).format('YYYY/MM/DD') : '—'
 }
 
+export function dateInputValue(value: string | null | undefined): string {
+  return value ? dayjs(value).format('YYYY-MM-DD') : ''
+}
+
+export function appliedDateTime(value: string | null | undefined): string | null {
+  return value ? dayjs(`${value}T00:00:00`).format() : null
+}
+
 export function formatRelativeDate(value: string | null | undefined): string {
   if (!value) return '时间未知'
   const target = dayjs(value)

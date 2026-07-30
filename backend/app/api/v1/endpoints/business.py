@@ -9,12 +9,14 @@ from app.application.email_access import (
     EmailAccessService,
     mask_email_address,
 )
+from app.application.reminders import ReminderService
 from app.application.schemas import (
     ApplicationEventPage,
     ApplicationEventRead,
     EmailAccountActiveUpdate,
     EmailAccountCreate,
     EmailAccountRead,
+    EmailAccountSyncSettingsUpdate,
     EmailConnectionTestResult,
     EmailDetail,
     EmailListItem,
@@ -25,6 +27,8 @@ from app.application.schemas import (
     JobApplicationPage,
     JobApplicationRead,
     JobApplicationUpdate,
+    ReminderRead,
+    ReminderReadUpdate,
     ReplyDraftCreate,
     ReplyDraftRead,
     ReplyDraftUpdate,
@@ -79,6 +83,7 @@ def _account_read(account: EmailAccount) -> EmailAccountRead:
     return EmailAccountRead(
         id=account.id,
         provider=account.provider,
+        email_address=account.email_address,
         email_address_masked=mask_email_address(account.email_address),
         imap_host=account.imap_host,
         imap_port=account.imap_port,
@@ -87,6 +92,10 @@ def _account_read(account: EmailAccount) -> EmailAccountRead:
         smtp_port=account.smtp_port,
         smtp_security=account.smtp_security,
         is_active=account.is_active,
+        auto_sync_enabled=bool(account.auto_sync_enabled),
+        sync_interval_minutes=account.sync_interval_minutes or 10,
+        next_sync_at=account.next_sync_at,
+        last_auto_sync_at=account.last_auto_sync_at,
         inbox_uid_validity=account.inbox_uid_validity,
         last_synced_uid=account.last_synced_uid,
         last_sync_at=account.last_sync_at,
@@ -133,6 +142,25 @@ def set_email_account_active(
 ) -> EmailAccountRead:
     return _account_read(
         use_case.set_account_active(account_id, is_active=payload.is_active)
+    )
+
+
+@router.patch(
+    "/email-accounts/{account_id}/sync-settings",
+    response_model=EmailAccountRead,
+    tags=["email-accounts"],
+)
+def update_email_account_sync_settings(
+    account_id: int,
+    payload: EmailAccountSyncSettingsUpdate,
+    use_case: EmailAccessDependency,
+) -> EmailAccountRead:
+    return _account_read(
+        use_case.update_sync_settings(
+            account_id,
+            enabled=payload.enabled,
+            interval_minutes=payload.interval_minutes,
+        )
     )
 
 
@@ -400,6 +428,40 @@ def update_task(
     use_case: ServiceDependency,
 ) -> TaskRead:
     return TaskRead.model_validate(use_case.update_task(task_id, payload))
+
+
+@router.get("/reminders", response_model=list[ReminderRead], tags=["reminders"])
+def list_reminders(
+    session: SessionDependency,
+    settings: SettingsDependency,
+    unread_only: bool = False,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
+) -> list[ReminderRead]:
+    reminders = ReminderService(session, settings.demo_user_id).list(
+        unread_only=unread_only,
+        offset=offset,
+        limit=limit,
+    )
+    return [ReminderRead.model_validate(item) for item in reminders]
+
+
+@router.patch(
+    "/reminders/{reminder_id}/read",
+    response_model=ReminderRead,
+    tags=["reminders"],
+)
+def update_reminder_read(
+    reminder_id: int,
+    payload: ReminderReadUpdate,
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> ReminderRead:
+    reminder = ReminderService(session, settings.demo_user_id).set_read(
+        reminder_id,
+        read=payload.read,
+    )
+    return ReminderRead.model_validate(reminder)
 
 
 @router.get(

@@ -1,7 +1,10 @@
 from contextlib import nullcontext
 
+import pytest
+
 from app.application.email_access import EmailAccessService
 from app.infrastructure.db.models.email_account import EmailAccount
+from app.infrastructure.db.repositories import ResourceConflictError
 
 
 class FakeSession:
@@ -51,3 +54,34 @@ def test_deactivating_account_does_not_change_other_accounts() -> None:
 
     assert deactivated.is_active is False
     assert repository.deactivated_except == "not-called"
+
+
+def test_enabling_automatic_sync_schedules_immediate_first_run() -> None:
+    account = EmailAccount(id=9, user_id=1, is_active=True)
+    repository = FakeAccountRepository(account)
+    service = EmailAccessService(FakeSession(), 1)  # type: ignore[arg-type]
+    service.accounts = repository  # type: ignore[assignment]
+
+    updated = service.update_sync_settings(
+        9,
+        enabled=True,
+        interval_minutes=10,
+    )
+
+    assert updated.auto_sync_enabled is True
+    assert updated.sync_interval_minutes == 10
+    assert updated.next_sync_at is not None
+
+
+def test_inactive_account_cannot_enable_automatic_sync() -> None:
+    account = EmailAccount(id=9, user_id=1, is_active=False)
+    repository = FakeAccountRepository(account)
+    service = EmailAccessService(FakeSession(), 1)  # type: ignore[arg-type]
+    service.accounts = repository  # type: ignore[assignment]
+
+    with pytest.raises(ResourceConflictError, match="停用的邮箱"):
+        service.update_sync_settings(
+            9,
+            enabled=True,
+            interval_minutes=10,
+        )

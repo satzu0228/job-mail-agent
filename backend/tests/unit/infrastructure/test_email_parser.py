@@ -102,3 +102,66 @@ def test_sanitizer_removes_dangerous_protocols_and_remote_images() -> None:
     assert "data:" not in cleaned
     assert "onclick" not in cleaned
     assert "mailto:hr@example.com" in cleaned
+
+
+def test_sanitizer_keeps_safe_email_layout_and_button_styles() -> None:
+    cleaned = sanitize_html(
+        """
+        <style>.button { position: fixed; inset: 0; }</style>
+        <table width="100%" cellpadding="16" cellspacing="0" bgcolor="#f5f7fa">
+          <tr>
+            <td align="center" style="padding: 20px; position: fixed">
+              <a
+                href="https://jobs.example.com/interview"
+                class="button"
+                style="
+                  display: inline-block;
+                  padding: 12px 24px;
+                  color: #ffffff;
+                  background-color: #3370ff;
+                  border-radius: 6px;
+                  background-image: url(https://tracker.example/pixel);
+                "
+              >确认面试</a>
+            </td>
+          </tr>
+        </table>
+        """
+    )
+
+    assert '<table width="100%" cellpadding="16" cellspacing="0"' in cleaned
+    assert 'bgcolor="#f5f7fa"' in cleaned
+    assert 'style="padding: 20px"' in cleaned
+    assert "display: inline-block" in cleaned
+    assert "background-color: #3370ff" in cleaned
+    assert "border-radius: 6px" in cleaned
+    assert 'target="_blank"' in cleaned
+    assert "position" not in cleaned
+    assert "tracker.example" not in cleaned
+    assert "<style>.button {}</style>" in cleaned
+    assert 'class="button"' in cleaned
+
+
+def test_sanitizer_keeps_responsive_css_that_hides_duplicate_mobile_markup() -> None:
+    cleaned = sanitize_html(
+        """
+        <style>
+          .desktop { display: block !important; width: 640px; }
+          .mobile { display: none !important; width: 320px; }
+          .tracking { background-image: url(https://tracker.example/pixel); }
+          @media (max-width: 600px) {
+            .desktop { display: none !important; }
+            .mobile { display: block !important; }
+          }
+        </style>
+        <div class="desktop">通知内容</div>
+        <div class="mobile">通知内容</div>
+        """
+    )
+
+    assert 'class="desktop"' in cleaned
+    assert 'class="mobile"' in cleaned
+    assert ".desktop {display: block !important; width: 640px}" in cleaned
+    assert ".mobile {display: none !important; width: 320px}" in cleaned
+    assert "@media (max-width: 600px)" in cleaned
+    assert "tracker.example" not in cleaned

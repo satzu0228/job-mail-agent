@@ -15,7 +15,7 @@ export const stageMeta: Record<ApplicationStage, { label: string; type: TagKind 
   APPLIED: { label: '已投递', type: 'info' },
   ASSESSMENT: { label: '笔试', type: 'warning' },
   INTERVIEW: { label: '面试', type: 'primary' },
-  OFFER: { label: 'Offer', type: 'success' },
+  OFFER: { label: '录用', type: 'success' },
   REJECTED: { label: '已拒绝', type: 'danger' },
   WITHDRAWN: { label: '已撤回', type: 'info' },
 }
@@ -23,7 +23,7 @@ export const stageMeta: Record<ApplicationStage, { label: string; type: TagKind 
 export const categoryMeta: Record<EmailCategory, { label: string; type: TagKind }> = {
   INTERVIEW: { label: '面试邀请', type: 'primary' },
   ASSESSMENT: { label: '笔试测评', type: 'warning' },
-  OFFER: { label: 'Offer', type: 'success' },
+  OFFER: { label: '录用通知', type: 'success' },
   REJECTION: { label: '拒信', type: 'danger' },
   MATERIAL_REQUEST: { label: '材料补充', type: 'warning' },
   APPLICATION_UPDATE: { label: '申请进展', type: 'primary' },
@@ -81,4 +81,75 @@ export const taskStatusMeta: Record<TaskStatus, { label: string; type: TagKind }
   CONFIRMED: { label: '已确认', type: 'primary' },
   COMPLETED: { label: '已完成', type: 'success' },
   CANCELLED: { label: '已取消', type: 'info' },
+}
+
+export const eventTypeLabels: Record<string, string> = {
+  APPLICATION_CREATED: '创建申请',
+  EMAIL_LINKED: '关联邮件',
+  STAGE_CHANGED: '阶段变更',
+  EMAIL_EVENT: '邮件事件',
+  INTERVIEW: '面试安排',
+  ASSESSMENT: '笔试测评',
+  OFFER: '录用通知',
+  REJECTION: '流程终止',
+  MATERIAL_REQUEST: '材料补充',
+  APPLICATION_UPDATE: '申请进展',
+  RECRUITER_COMMUNICATION: '招聘沟通',
+  JOB_RELATED_OTHER: '其他求职事件',
+}
+
+export const syncStatusLabels: Record<string, string> = {
+  SUCCEEDED: '同步成功',
+  PARTIAL: '部分成功',
+  FAILED: '同步失败',
+}
+
+export const analysisFieldLabels: Record<string, string> = {
+  COMPANY: '公司',
+  POSITION: '岗位',
+  PROPOSED_STAGE: '求职阶段',
+  EVENT_TYPE: '事件类型',
+  CONTACT_NAME: '联系人',
+  CONTACT_EMAIL: '联系邮箱',
+  EVENT_TIME: '事件时间',
+  DEADLINE: '截止时间',
+  LOCATION: '地点',
+  MEETING_URL: '会议链接',
+  MATERIALS: '所需材料',
+}
+
+export function analysisFieldLabel(value: string): string {
+  return analysisFieldLabels[value.toUpperCase()] ?? `未识别字段：${value}`
+}
+
+export const workflowStatusLabels: Record<string, string> = {
+  PENDING: '等待处理',
+  RUNNING: '处理中',
+  WAITING_REVIEW: '等待人工审核',
+  SUCCEEDED: '处理完成',
+  FAILED: '处理失败',
+  CANCELLED: '已取消',
+}
+
+export function enumValueLabel(value: string): string {
+  const labels: Record<string, string> = {
+    APPLIED: '已投递',
+    ASSESSMENT: '笔试',
+    INTERVIEW: '面试',
+    OFFER: '录用',
+    REJECTED: '已拒绝',
+    WITHDRAWN: '已撤回',
+    PENDING: '待处理',
+    CONFIRMED: '已确认',
+    COMPLETED: '已完成',
+    CANCELLED: '已取消',
+    APPROVED: '已批准',
+    SUCCEEDED: '已完成',
+    FAILED: '失败',
+    ALLOWED: '允许',
+    DENIED: '不允许',
+    USER: '用户确认',
+    RULE: '规则确认',
+  }
+  return labels[value] ?? value
 }
