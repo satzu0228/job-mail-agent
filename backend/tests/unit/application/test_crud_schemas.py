@@ -106,6 +106,9 @@ def test_manual_stage_transition_updates_status_and_writes_user_audit_event(
         def begin(self):
             return nullcontext()
 
+        def scalar(self, statement):
+            return 1
+
         def add(self, value: object) -> None:
             self.added.append(value)
 
@@ -160,6 +163,9 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
 
         def begin(self):
             return nullcontext()
+
+        def scalar(self, statement):
+            return 1
 
         def add(self, value: object) -> None:
             self.added.append(value)

@@ -179,6 +179,26 @@ function taskLabel(task: Task): string {
     : task.title
 }
 
+function interviewResultLabelFromDetails(value: unknown): string {
+  return value === 'PASSED' ? '已通过' : value === 'FAILED' ? '未通过' : '待确认'
+}
+
+function applicationEventSummary(event: ApplicationEvent): string {
+  if (event.event_type === 'INTERVIEW_RESULT_CHANGED') {
+    const details = event.details ?? {}
+    const round = typeof details.interview_round === 'number'
+      ? interviewRoundLabel(details.interview_round)
+      : '面试'
+    return `${round}结果：${interviewResultLabelFromDetails(details.interview_result)}`
+  }
+  if (event.event_type === 'APPLICATION_WITHDRAWN_FROM_CALENDAR') {
+    return '已撤回申请，并取消未完成面试日程'
+  }
+  return event.confirmed_stage
+    ? `${event.previous_stage ? stageLabel(event.previous_stage) : '未设置'} → ${stageLabel(event.confirmed_stage)}`
+    : event.raw_time_text || '已记录申请事件'
+}
+
 function interviewResultLabel(result: InterviewResult | null): string {
   return result === 'PASSED' ? '已通过' : result === 'FAILED' ? '未通过' : '待确认'
 }
@@ -627,11 +647,7 @@ onMounted(loadData)
                 <div>
                   <strong>{{ eventTypeLabels[event.event_type] || '申请事件' }}</strong>
                   <span>
-                    {{
-                      event.confirmed_stage
-                        ? `${event.previous_stage ? stageLabel(event.previous_stage) : '未设置'} → ${stageLabel(event.confirmed_stage)}`
-                        : event.raw_time_text || '已记录申请事件'
-                    }}
+                    {{ applicationEventSummary(event) }}
                   </span>
                 </div>
                 <time>{{ formatDateTime(event.event_at || event.created_at) }}</time>

@@ -154,6 +154,12 @@ class BusinessCrudService:
                     status=TaskStatus.COMPLETED,
                     current_round_only=True,
                 )
+            interview_round = self._session.scalar(
+                select(func.max(Task.interview_round)).where(
+                    Task.application_id == application.id,
+                    Task.task_type == TaskType.INTERVIEW,
+                )
+            )
             self._session.add(
                 ApplicationEvent(
                     application_id=application.id,
@@ -168,6 +174,7 @@ class BusinessCrudService:
                             previous_result.value if previous_result else None
                         ),
                         "interview_result": data.result.value,
+                        "interview_round": interview_round,
                         "reason": data.reason,
                     },
                 )
