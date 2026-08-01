@@ -10,6 +10,9 @@ import type {
   EmailDetail,
   EmailListItem,
   EmailSyncResult,
+  InterviewRound,
+  InterviewRoundResultResponse,
+  InterviewRoundResultUpdate,
   JobApplication,
   JobApplicationCreate,
   JobApplicationInterviewResultUpdate,
@@ -147,6 +150,17 @@ export const applicationApi = {
       .get<Page<ApplicationEvent>>(`/job-applications/${id}/events`, {
         params: { offset, limit },
       })
+      .then(({ data }) => data),
+  listInterviewRounds: (id: number) =>
+    http
+      .get<InterviewRound[]>(`/job-applications/${id}/interview-rounds`)
+      .then(({ data }) => data),
+  updateInterviewRoundResult: (id: number, payload: InterviewRoundResultUpdate) =>
+    http
+      .put<InterviewRoundResultResponse>(
+        `/job-applications/${id}/interview-rounds/${payload.round_number}/result`,
+        payload,
+      )
       .then(({ data }) => data),
 }
 

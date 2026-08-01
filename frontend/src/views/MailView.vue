@@ -48,6 +48,8 @@ const keyword = ref('')
 const loadingList = ref(false)
 const loadingDetail = ref(false)
 const syncing = ref(false)
+const batchProcessing = ref(false)
+const batchProgress = ref('')
 const processing = ref(false)
 const movingEmail = ref(false)
 const downloadingAttachment = ref<number | null>(null)
@@ -82,8 +84,22 @@ const directionCounts = computed(() => {
 
 const selectedId = computed(() => Number(route.params.emailId) || null)
 const missingFieldLabels = computed(() => {
-  const fields = selectedEmail.value?.current_analysis?.missing_fields ?? []
-  return [...new Set(fields.map(analysisFieldLabel))]
+  const analysis = selectedEmail.value?.current_analysis
+  const fields = analysis?.missing_fields ?? []
+  // 面试邀请专属字段：仅当邮件中包含事件时间时才显示为"待确认"
+  const invitationOnlyFields = new Set([
+    'CONTACT_NAME',
+    'CONTACT_EMAIL',
+    'LOCATION',
+    'MEETING_URL',
+  ])
+  const filtered = fields.filter((field: string) => {
+    if (invitationOnlyFields.has(field.toUpperCase())) {
+      return !!analysis?.event_time
+    }
+    return true
+  })
+  return [...new Set(filtered.map(analysisFieldLabel))]
 })
 const emailHtmlDocument = computed(() => {
   const html = selectedEmail.value?.html_sanitized
@@ -209,12 +225,44 @@ async function syncAccount() {
   syncing.value = true
   try {
     const result = await emailAccountApi.sync(selectedAccountId.value)
-    ElMessage.success(`同步完成，新增 ${result.created} 封邮件`)
+    const newIds: number[] = result.created_email_ids ?? []
+    const newCount = result.created
+
+    if (newCount === 0 || newIds.length === 0) {
+      ElMessage.success('同步完成，没有新邮件')
+      await loadBaseData()
+      return
+    }
+
+    ElMessage.success(`同步完成，新增 ${newCount} 封邮件，正在自动智能处理...`)
     await loadBaseData()
+
+    // 按邮件先后顺序串行启动工作流（顺序影响推迟关联逻辑）
+    batchProcessing.value = true
+    let successCount = 0
+    for (let i = 0; i < newIds.length; i++) {
+      batchProgress.value = `正在智能处理 (${i + 1}/${newIds.length})...`
+      try {
+        await emailApi.startWorkflow(newIds[i])
+        successCount++
+      } catch (error) {
+        console.error(`Email ${newIds[i]} workflow failed:`, error)
+        // 单封失败不阻塞后续
+      }
+    }
+    batchProcessing.value = false
+    batchProgress.value = ''
+
+    await loadBaseData()
+    ElMessage.success(
+      `${successCount}/${newIds.length} 封邮件处理完毕，请前往审核中心审批`,
+    )
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     syncing.value = false
+    batchProcessing.value = false
+    batchProgress.value = ''
   }
 }
 
@@ -370,9 +418,15 @@ onUnmounted(() => {
           <ElButton
             :icon="Refresh"
             :loading="syncing"
+            :disabled="batchProcessing"
             title="同步收件箱"
             @click="syncAccount"
           />
+        </div>
+
+        <div v-if="batchProcessing" class="batch-progress">
+          <ElIcon class="is-loading"><Loading /></ElIcon>
+          <span>{{ batchProgress }}</span>
         </div>
 
         <div class="direction-tabs" role="tablist" aria-label="邮件方向">
@@ -722,6 +776,16 @@ onUnmounted(() => {
 .account-row {
   display: flex;
   gap: 8px;
+}
+
+.batch-progress {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--jm-primary, #409eff);
+  font-size: 13px;
+  background: var(--jm-primary-light, #ecf5ff);
 }
 
 .account-select {

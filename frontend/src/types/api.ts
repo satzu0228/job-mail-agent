@@ -35,6 +35,7 @@ export type ReviewActionType =
   | 'CREATE_APPLICATION'
   | 'LINK_APPLICATION'
   | 'UPDATE_APPLICATION_STAGE'
+  | 'UPDATE_INTERVIEW_RESULT'
   | 'CREATE_TASK'
   | 'UPDATE_TASK'
   | 'SEND_REPLY'
@@ -371,6 +372,35 @@ export interface ReviewDecisionResponse {
     error_message: string | null
   } | null
   follow_up_review_task: ReviewTask | null
+}
+
+export interface InterviewRound {
+  id: number
+  application_id: number
+  round_number: number
+  result: InterviewResult
+  interview_date: string | null
+  location: string | null
+  meeting_url: string | null
+  source: 'MANUAL' | 'EMAIL'
+  source_email_id: number | null
+  source_task_id: number | null
+  notes: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface InterviewRoundResultUpdate {
+  version: number
+  round_number: number
+  result: InterviewResult
+  reason: string
+}
+
+export interface InterviewRoundResultResponse {
+  application: JobApplication
+  round: InterviewRound
 }
 
 export interface WorkflowRun {

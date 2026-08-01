@@ -18,6 +18,7 @@ from app.application.schemas import (
     TaskCreate,
     TaskUpdate,
 )
+from app.application.schemas import InterviewRoundResultUpdate
 from app.application.task_linkage import settle_interview_tasks
 from app.domain.application_state import validate_stage_transition
 from app.domain.enums import (
@@ -25,12 +26,14 @@ from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
     InterviewResult,
+    InterviewRoundSource,
     OfferResult,
     ReplyDraftStatus,
     TaskStatus,
     TaskType,
 )
 from app.infrastructure.db.models.application_event import ApplicationEvent
+from app.infrastructure.db.models.interview_round import InterviewRound
 from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.reminder import Reminder
 from app.infrastructure.db.models.reply_draft import ReplyDraft
@@ -95,6 +98,20 @@ class BusinessCrudService:
             )
             if not validation.can_apply:
                 raise ResourceConflictError(validation.reason)
+
+            # 面试→录用：要求至少有一轮通过
+            if (
+                application.current_stage is ApplicationStage.INTERVIEW
+                and data.proposed_stage is ApplicationStage.OFFER
+            ):
+                passed_round = self._session.scalar(
+                    select(InterviewRound).where(
+                        InterviewRound.application_id == application_id,
+                        InterviewRound.result == InterviewResult.PASSED,
+                    ).limit(1)
+                )
+                if passed_round is None:
+                    raise ResourceConflictError("至少需要一轮面试通过才能进入录用阶段")
 
             previous = application.current_stage
             application.current_stage = data.proposed_stage
@@ -450,6 +467,113 @@ class BusinessCrudService:
             )
             for name, value in values.items()
         }
+
+    def list_interview_rounds(self, application_id: int) -> list[InterviewRound]:
+        """获取申请的所有面试轮次，按轮次号升序排列。"""
+        self.applications.get(application_id)  # 校验归属权
+        return list(
+            self._session.scalars(
+                select(InterviewRound)
+                .where(InterviewRound.application_id == application_id)
+                .order_by(InterviewRound.round_number.asc())
+            )
+        )
+
+    def update_interview_round_result(
+        self,
+        application_id: int,
+        round_number: int,
+        data: InterviewRoundResultUpdate,
+    ) -> tuple[JobApplication, InterviewRound]:
+        """手动更新某轮面试的结果。"""
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+
+            existing = self._session.scalar(
+                select(InterviewRound).where(
+                    InterviewRound.application_id == application_id,
+                    InterviewRound.round_number == round_number,
+                )
+            )
+            if existing is None:
+                # 手动创建新轮次记录
+                existing = InterviewRound(
+                    application_id=application_id,
+                    round_number=data.round_number,
+                    result=data.result,
+                    source=InterviewRoundSource.MANUAL,
+                    notes=data.reason,
+                )
+                self._session.add(existing)
+            else:
+                existing.result = data.result
+                existing.source = InterviewRoundSource.MANUAL
+                existing.notes = data.reason
+
+            self._session.flush()
+
+            # 同步缓存
+            latest = self._session.scalar(
+                select(InterviewRound)
+                .where(InterviewRound.application_id == application_id)
+                .order_by(InterviewRound.round_number.desc())
+                .limit(1)
+            )
+            previous_result = application.interview_result
+            application.interview_result = latest.result if latest else None
+
+            # 收敛关联日程
+            if data.result in {InterviewResult.PASSED, InterviewResult.FAILED}:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application_id,
+                    status=TaskStatus.COMPLETED,
+                    current_round_only=True,
+                )
+
+            # 记录事件
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application_id,
+                    event_type="INTERVIEW_RESULT_CHANGED",
+                    previous_stage=application.current_stage,
+                    confirmed_stage=application.current_stage,
+                    details={
+                        "round_number": data.round_number,
+                        "previous_result": (
+                            previous_result.value if previous_result else None
+                        ),
+                        "interview_result": data.result.value,
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application, existing
+
+    def link_email_application(
+        self,
+        email_id: int,
+        application_id: int,
+    ) -> object:
+        """手动将邮件关联到求职申请，不依赖 AI 工作流。"""
+        with self._session.begin():
+            email = self.emails.get(email_id)
+            application = self.applications.get(application_id)
+            if email.application_id and email.application_id != application_id:
+                raise ResourceConflictError("邮件已关联到其他求职申请")
+            email.application_id = application_id
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application_id,
+                    source_email_id=email_id,
+                    event_type="EMAIL_LINKED",
+                    details={"source": "manual", "previous_application_id": email.application_id},
+                )
+            )
+            self._session.flush()
+            return email
 
     def _ensure_demo_user(self) -> None:
         if self._session.get(User, self._user_id) is None:

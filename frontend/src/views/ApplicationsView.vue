@@ -7,6 +7,7 @@ import { applicationApi, emailApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import {
   eventTypeLabels,
+  roundResultMeta,
   stageMeta,
   taskStatusMeta,
   taskTypeMeta,
@@ -23,6 +24,7 @@ import type {
   ApplicationStage,
   EmailListItem,
   InterviewResult,
+  InterviewRound,
   JobApplication,
   JobApplicationCreate,
   OfferResult,
@@ -34,6 +36,7 @@ type ProgressFilter = 'all' | 'active' | 'closed'
 const applications = ref<JobApplication[]>([])
 const tasks = ref<Task[]>([])
 const emails = ref<EmailListItem[]>([])
+const interviewRounds = ref<InterviewRound[]>([])
 const loading = ref(false)
 const keyword = ref('')
 const progressFilter = ref<ProgressFilter>('all')
@@ -88,6 +91,15 @@ const resultForm = reactive({
 
 const offerForm = reactive({
   result: null as OfferResult | null,
+  reason: '',
+})
+
+const roundResultVisible = ref(false)
+const savingRoundResult = ref(false)
+const roundResultForm = reactive({
+  roundNumber: 0,
+  roundLabel: '',
+  result: null as InterviewResult | null,
   reason: '',
 })
 
@@ -306,9 +318,15 @@ async function openApplication(application: JobApplication) {
   drawerVisible.value = true
   loadingEvents.value = true
   try {
-    applicationEvents.value = (await applicationApi.events(application.id)).items
+    const [events, rounds] = await Promise.all([
+      applicationApi.events(application.id),
+      applicationApi.listInterviewRounds(application.id),
+    ])
+    applicationEvents.value = events.items
+    interviewRounds.value = rounds
   } catch (error) {
     applicationEvents.value = []
+    interviewRounds.value = []
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loadingEvents.value = false
@@ -438,6 +456,47 @@ function openNextInterview() {
     reason: '',
   })
   nextInterviewVisible.value = true
+}
+
+function openRoundResult(round: InterviewRound) {
+  roundResultForm.roundNumber = round.round_number
+  roundResultForm.roundLabel = interviewRoundLabel(round.round_number)
+  roundResultForm.result = round.result
+  roundResultForm.reason = ''
+  roundResultVisible.value = true
+}
+
+async function updateRoundResult() {
+  if (!selected.value || !roundResultForm.result) return
+  if (!roundResultForm.reason.trim()) {
+    ElMessage.warning('请填写修改原因')
+    return
+  }
+  savingRoundResult.value = true
+  try {
+    const response = await applicationApi.updateInterviewRoundResult(selected.value.id, {
+      version: selected.value.version,
+      round_number: roundResultForm.roundNumber,
+      result: roundResultForm.result,
+      reason: roundResultForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === response.application.id)
+    if (index >= 0) applications.value[index] = response.application
+    selected.value = response.application
+    // 刷新轮次和事件
+    const [rounds, events] = await Promise.all([
+      applicationApi.listInterviewRounds(selected.value.id),
+      applicationApi.events(selected.value.id),
+    ])
+    interviewRounds.value = rounds
+    applicationEvents.value = events.items
+    roundResultVisible.value = false
+    ElMessage.success(`${roundResultForm.roundLabel}结果已更新为"${interviewResultLabel(response.round.result)}"`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    savingRoundResult.value = false
+  }
 }
 
 function openOfferStage() {
@@ -868,6 +927,48 @@ onMounted(loadData)
             </div>
           </ElTabPane>
 
+          <ElTabPane :label="`面试轮次 ${interviewRounds.length}`">
+            <div v-loading="loadingEvents" class="record-list">
+              <div v-if="interviewRounds.length === 0 && !loadingEvents" class="drawer-empty">
+                暂无面试轮次，AI 处理面试邮件或手动登记面试后将显示
+              </div>
+              <div
+                v-for="round in [...interviewRounds].sort((a, b) => a.round_number - b.round_number)"
+                :key="round.id"
+                class="round-card"
+              >
+                <div class="round-header">
+                  <span class="round-number">{{ interviewRoundLabel(round.round_number) }}</span>
+                  <ElTag
+                    :type="roundResultMeta[round.result]?.type ?? 'info'"
+                    effect="light"
+                    size="small"
+                  >
+                    {{ interviewResultLabel(round.result) }}
+                  </ElTag>
+                  <span v-if="round.source === 'EMAIL'" class="round-source">来自邮件</span>
+                </div>
+                <div class="round-body">
+                  <div v-if="round.interview_date" class="round-detail">
+                    <span>面试时间</span>
+                    <strong>{{ formatDateTime(round.interview_date) }}</strong>
+                  </div>
+                  <div v-if="round.location" class="round-detail">
+                    <span>地点</span>
+                    <strong>{{ round.location }}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    class="round-edit-btn"
+                    @click="openRoundResult(round)"
+                  >
+                    编辑本轮结果
+                  </button>
+                </div>
+              </div>
+            </div>
+          </ElTabPane>
+
           <ElTabPane :label="`时间线 ${applicationEvents.length}`">
             <div v-loading="loadingEvents" class="record-list">
               <div v-for="event in applicationEvents" :key="event.id" class="record-row">
@@ -942,6 +1043,62 @@ onMounted(loadData)
       <template #footer>
         <ElButton @click="resultVisible = false">取消</ElButton>
         <ElButton type="primary" :loading="savingResult" @click="updateInterviewResult">
+          保存面试结果
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog
+      v-model="roundResultVisible"
+      :title="`编辑${roundResultForm.roundLabel}面试结果`"
+      width="min(520px, 92vw)"
+      class="result-dialog"
+    >
+      <template #header>
+        <div class="result-dialog-heading">
+          <span>编辑{{ roundResultForm.roundLabel }}面试结果</span>
+          <small v-if="selected">{{ selected.company_name }} · {{ selected.position_name }}</small>
+        </div>
+      </template>
+      <div v-if="selected" class="result-editor">
+        <div class="result-current">
+          <span>当前轮次</span>
+          <strong>{{ roundResultForm.roundLabel }}</strong>
+          <i>选择本轮面试的最新结果</i>
+        </div>
+        <div class="result-options" role="radiogroup" aria-label="面试结果">
+          <button
+            v-for="option in interviewResultOptions"
+            :key="option.value"
+            type="button"
+            class="result-option"
+            :class="[
+              { active: roundResultForm.result === option.value },
+              interviewResultClass(option.value),
+            ]"
+            role="radio"
+            :aria-checked="roundResultForm.result === option.value"
+            @click="roundResultForm.result = option.value"
+          >
+            <span class="option-mark" />
+            <strong>{{ option.label }}</strong>
+            <small>{{ option.description }}</small>
+          </button>
+        </div>
+        <label class="result-reason">
+          <span>修改说明</span>
+          <ElInput
+            v-model="roundResultForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            placeholder="例如：电话确认已通过本轮面试，等待下一轮安排"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <ElButton @click="roundResultVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="savingRoundResult" @click="updateRoundResult">
           保存面试结果
         </ElButton>
       </template>
@@ -1588,6 +1745,74 @@ onMounted(loadData)
   .search-input {
     width: 100%;
   }
+}
+
+.round-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--jm-border-light);
+}
+
+.round-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.round-number {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e2735;
+  min-width: 40px;
+}
+
+.round-source {
+  margin-left: auto;
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+  background: #f5f6f7;
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+
+.round-body {
+  display: grid;
+  gap: 6px;
+  padding-left: 0;
+}
+
+.round-detail {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.round-detail span {
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+}
+
+.round-detail strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.round-edit-btn {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--jm-primary);
+  background: transparent;
+  border: 1px solid var(--jm-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.round-edit-btn:hover {
+  background: #f0f5ff;
 }
 
 @media (max-width: 560px) {

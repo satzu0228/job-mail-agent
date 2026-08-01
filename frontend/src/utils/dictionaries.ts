@@ -43,6 +43,7 @@ export const reviewActionMeta: Record<ReviewActionType, string> = {
   CREATE_APPLICATION: '新建申请',
   LINK_APPLICATION: '关联申请',
   UPDATE_APPLICATION_STAGE: '更新阶段',
+  UPDATE_INTERVIEW_RESULT: '更新面试结果',
   CREATE_TASK: '创建日程',
   UPDATE_TASK: '更新日程',
   SEND_REPLY: '发送回复',
@@ -114,6 +115,7 @@ export const analysisFieldLabels: Record<string, string> = {
   COMPANY: '公司',
   POSITION: '岗位',
   PROPOSED_STAGE: '求职阶段',
+  INTERVIEW_RESULT: '面试结果',
   EVENT_TYPE: '事件类型',
   CONTACT_NAME: '联系人',
   CONTACT_EMAIL: '联系邮箱',
@@ -135,6 +137,24 @@ export const workflowStatusLabels: Record<string, string> = {
   SUCCEEDED: '处理完成',
   FAILED: '处理失败',
   CANCELLED: '已取消',
+}
+
+export const roundResultMeta: Record<string, { label: string; type: TagKind }> = {
+  PASSED: { label: '已通过', type: 'success' },
+  FAILED: { label: '未通过', type: 'danger' },
+  PENDING: { label: '待确认', type: 'warning' },
+}
+
+const CHINESE_NUMERALS = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+
+export function interviewRoundLabel(round: number): string {
+  if (round < 1 || round > 20) return `第 ${round} 轮面试`
+  if (round <= 10) return `${CHINESE_NUMERALS[round]}面`
+  return `第 ${round} 轮面试`
+}
+
+export function interviewResultLabel(result: string): string {
+  return result === 'PASSED' ? '已通过' : result === 'FAILED' ? '未通过' : '待确认'
 }
 
 export function enumValueLabel(value: string): string {

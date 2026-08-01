@@ -30,6 +30,9 @@ from app.application.schemas import (
     EmailPage,
     EmailSyncRequest,
     EmailSyncResult,
+    InterviewRoundRead,
+    InterviewRoundResultResponse,
+    InterviewRoundResultUpdate,
     InterviewTaskWithdrawApplication,
     JobApplicationCreate,
     JobApplicationInterviewResultUpdate,
@@ -574,6 +577,58 @@ def withdraw_application_from_interview_task(
 ) -> TaskRead:
     return TaskRead.model_validate(
         use_case.withdraw_application_from_interview_task(task_id, payload)
+    )
+
+
+@router.post(
+    "/emails/{email_id}/link-application",
+    response_model=EmailDetail,
+    tags=["emails"],
+)
+def link_email_to_application(
+    email_id: int,
+    application_id: Annotated[int, Query(gt=0, alias="application_id")],
+    use_case: ServiceDependency,
+) -> EmailDetail:
+    return EmailDetail.model_validate(
+        use_case.link_email_application(email_id, application_id)
+    )
+
+
+@router.get(
+    "/job-applications/{application_id}/interview-rounds",
+    response_model=list[InterviewRoundRead],
+    tags=["interview-rounds"],
+)
+def list_interview_rounds(
+    application_id: int,
+    use_case: ServiceDependency,
+) -> list[InterviewRoundRead]:
+    return [
+        InterviewRoundRead.model_validate(item)
+        for item in use_case.list_interview_rounds(application_id)
+    ]
+
+
+@router.put(
+    "/job-applications/{application_id}/interview-rounds/{round_number}/result",
+    response_model=InterviewRoundResultResponse,
+    tags=["interview-rounds"],
+)
+def update_interview_round_result(
+    application_id: int,
+    round_number: int,
+    payload: InterviewRoundResultUpdate,
+    use_case: ServiceDependency,
+) -> InterviewRoundResultResponse:
+    application, round_record = use_case.update_interview_round_result(
+        application_id,
+        round_number,
+        payload,
+    )
+    return InterviewRoundResultResponse(
+        application=JobApplicationRead.model_validate(application),
+        round=InterviewRoundRead.model_validate(round_record),
     )
 
 

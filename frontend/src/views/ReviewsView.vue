@@ -14,7 +14,7 @@ import {
 } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import { visibleReviewPayloadEntries } from '@/utils/reviewPayload'
-import type { EmailListItem, ReviewTask } from '@/types/api'
+import type { EmailListItem, ReviewActionType, ReviewTask } from '@/types/api'
 
 type ReviewFilter = 'pending' | 'processed'
 
@@ -22,6 +22,7 @@ const route = useRoute()
 const router = useRouter()
 
 const tasks = ref<ReviewTask[]>([])
+const batchApproving = ref(false)
 const emails = ref<EmailListItem[]>([])
 const filter = ref<ReviewFilter>('pending')
 const keyword = ref('')
@@ -263,6 +264,63 @@ async function decide(approveDecision: boolean, payload: Record<string, unknown>
   }
 }
 
+async function batchApprove() {
+  const pendingTasks = tasks.value.filter((task) => task.status === 'PENDING')
+  if (pendingTasks.length === 0) {
+    ElMessage.info('没有待审核的任务')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将依次批准 ${pendingTasks.length} 项待审核任务，包括关联申请、阶段变更、日程创建等。建议先确认第一项（新建申请）是否正确。`,
+      '批量批准全部审核',
+      {
+        confirmButtonText: `批准全部 ${pendingTasks.length} 项`,
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  batchApproving.value = true
+  let approved = 0
+  let failed = 0
+  for (const task of pendingTasks) {
+    try {
+      const payloads: Record<ReviewActionType, Record<string, unknown>> = {
+        CREATE_APPLICATION: {},
+        LINK_APPLICATION: { application_id: (task.proposed_payload as Record<string, unknown>).application_id },
+        UPDATE_APPLICATION_STAGE: {},
+        UPDATE_INTERVIEW_RESULT: {},
+        CREATE_TASK: {},
+        UPDATE_TASK: {},
+        SEND_REPLY: {},
+        ARCHIVE_EMAIL: {},
+        RESTORE_EMAIL: {},
+      }
+      await reviewApi.decide(task.id, {
+        version: task.version,
+        approve: true,
+        reviewed_payload: payloads[task.action_type] || null,
+        reason: '批量批准',
+      })
+      approved++
+    } catch {
+      failed++
+    }
+  }
+  batchApproving.value = false
+
+  if (failed === 0) {
+    ElMessage.success(`已批准全部 ${approved} 项审核`)
+  } else {
+    ElMessage.warning(`批准 ${approved} 项，${failed} 项失败（可能因为依赖顺序，请手动处理）`)
+  }
+  await loadData()
+}
+
 function payloadSummary(task: ReviewTask): string {
   const payload = task.proposed_payload
   const values = [
@@ -315,6 +373,8 @@ function fieldLabel(key: string): string {
     stage_validation: '阶段校验',
     source_folder: '当前文件夹',
     target_folder: '目标文件夹',
+    round_number: '面试轮次',
+    result: '面试结果',
   }
   return labels[key] ?? '其他信息'
 }
@@ -404,6 +464,14 @@ onMounted(loadData)
           :prefix-icon="Search"
           placeholder="搜索审核任务"
         />
+        <ElButton
+          v-if="tasks.filter((t) => t.status === 'PENDING').length > 0"
+          type="primary"
+          :loading="batchApproving"
+          @click="batchApprove"
+        >
+          批准全部 {{ tasks.filter((t) => t.status === 'PENDING').length }} 项
+        </ElButton>
         <ElButton :icon="Refresh" @click="loadData">刷新</ElButton>
       </div>
     </div>

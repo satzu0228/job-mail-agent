@@ -18,6 +18,7 @@ from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.infrastructure.db.models.email import Email
+    from app.infrastructure.db.models.interview_round import InterviewRound
     from app.infrastructure.db.models.user import User
 
 
@@ -95,5 +96,9 @@ class JobApplication(TimestampMixin, Base):
 
     user: Mapped[User] = relationship(back_populates="job_applications")
     emails: Mapped[list[Email]] = relationship(back_populates="application")
+    interview_rounds: Mapped[list[InterviewRound]] = relationship(
+        back_populates="application",
+        order_by="InterviewRound.round_number",
+    )
 
     __mapper_args__ = {"version_id_col": version}

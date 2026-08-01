@@ -7,6 +7,7 @@ from app.infrastructure.db.models.automation_rule_run import AutomationRuleRun
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
+from app.infrastructure.db.models.interview_round import InterviewRound
 from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.reminder import Reminder
 from app.infrastructure.db.models.reply_draft import ReplyDraft
@@ -23,6 +24,7 @@ __all__ = [
     "Email",
     "EmailAccount",
     "EmailAnalysis",
+    "InterviewRound",
     "JobApplication",
     "ReplyDraft",
     "Reminder",

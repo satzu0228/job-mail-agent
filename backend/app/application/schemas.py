@@ -693,3 +693,40 @@ class ReplySendResponse(ApiSchema):
     draft: ReplyDraftRead
     review_task: ReviewTaskRead
     execution: ActionExecutionRead
+
+
+class InterviewRoundRead(UtcResponseSchema):
+    id: int
+    application_id: int
+    round_number: int
+    result: InterviewResult
+    interview_date: datetime | None
+    location: str | None
+    meeting_url: str | None
+    source: str
+    source_email_id: int | None
+    source_task_id: int | None
+    notes: str | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class InterviewRoundResultUpdate(ApiSchema):
+    version: int = Field(gt=0)
+    round_number: int = Field(ge=1, le=20)
+    result: InterviewResult
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("面试结果修改原因不能为空")
+        return normalized
+
+
+class InterviewRoundResultResponse(ApiSchema):
+    application: JobApplicationRead
+    round: InterviewRoundRead

@@ -27,6 +27,7 @@ class ExtractionField(StrEnum):
     COMPANY = "COMPANY"
     POSITION = "POSITION"
     PROPOSED_STAGE = "PROPOSED_STAGE"
+    INTERVIEW_RESULT = "INTERVIEW_RESULT"
     EVENT_TYPE = "EVENT_TYPE"
     CONTACT_NAME = "CONTACT_NAME"
     CONTACT_EMAIL = "CONTACT_EMAIL"
@@ -51,6 +52,7 @@ class ExtractedStage(AgentSchema):
 
 class ExtractedInterviewResult(AgentSchema):
     value: InterviewResult
+    round_number: int | None = None
     confidence: Confidence
     evidence: list[Evidence] = Field(min_length=1, max_length=10)
 
@@ -187,6 +189,7 @@ class ExtractionOutput(AgentSchema):
             ExtractionField.COMPANY: self.company,
             ExtractionField.POSITION: self.position,
             ExtractionField.PROPOSED_STAGE: self.proposed_stage,
+            ExtractionField.INTERVIEW_RESULT: self.interview_result,
             ExtractionField.EVENT_TYPE: self.event_type,
             ExtractionField.CONTACT_NAME: self.contact_name,
             ExtractionField.CONTACT_EMAIL: self.contact_email,

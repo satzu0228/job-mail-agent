@@ -55,6 +55,13 @@ const visibleFields: Record<ReviewActionType, readonly string[]> = {
     'to_recipients',
     'cc_recipients',
   ],
+  UPDATE_INTERVIEW_RESULT: [
+    'company_name',
+    'position_name',
+    'round_number',
+    'result',
+    'summary',
+  ],
   ARCHIVE_EMAIL: ['source_folder', 'target_folder'],
   RESTORE_EMAIL: ['source_folder', 'target_folder'],
 }

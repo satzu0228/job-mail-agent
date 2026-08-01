@@ -35,6 +35,7 @@ from app.domain.enums import (
     ExecutionStatus,
     ExecutorType,
     InterviewResult,
+    InterviewRoundSource,
     ReplyDraftStatus,
     ReviewActionType,
     ReviewTaskStatus,
@@ -47,6 +48,7 @@ from app.infrastructure.db.models.action_execution import ActionExecution
 from app.infrastructure.db.models.application_event import ApplicationEvent
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
+from app.infrastructure.db.models.interview_round import InterviewRound
 from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
@@ -352,6 +354,24 @@ class ApplicationManagementService:
             self._session.get(JobApplication, selected) if selected is not None else None
         )
         action_type = _application_review_action(suggestion, candidates)
+
+        # 新建申请时忽略 LLM 选中的低分候选，确保 payload 一致性
+        if action_type is ReviewActionType.CREATE_APPLICATION:
+            selected = None
+            selected_application = None
+
+        # 关键：如果推荐新建申请，但已存在同一公司/发件人的待审核新建申请，
+        # 则改为关联申请以推迟解析，避免重复创建。
+        deferred_source: str | None = None
+        if action_type is ReviewActionType.CREATE_APPLICATION:
+            deferred_source = self._find_pending_create_review(
+                sender_address=email.from_address,
+                company_name=analysis.company_name,
+                exclude_email_id=email.id,
+            )
+            if deferred_source is not None:
+                action_type = ReviewActionType.LINK_APPLICATION
+
         payload = {
             "schema_version": "application-review.v1",
             "analysis_id": analysis.id,
@@ -370,6 +390,11 @@ class ApplicationManagementService:
             "interview_result": _extracted_interview_result(
                 analysis.extraction_json
             ),
+            "interview_round": _infer_round_from_extraction(
+                analysis.extraction_json,
+                selected,
+            ),
+            "deferred_source_review_task_id": deferred_source,
             "agent_output": suggestion.model_dump(mode="json"),
             "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
         }
@@ -399,6 +424,69 @@ class ApplicationManagementService:
         self._session.flush()
         workflow.pending_review_task_id = task.id
         return task
+
+    def _find_pending_create_review(
+        self,
+        *,
+        sender_address: str,
+        company_name: str | None,
+        exclude_email_id: int | None = None,
+    ) -> str | None:
+        """查找同一发件人或公司的待审核新建申请，用于推迟关联。"""
+        conditions = [
+            ReviewTask.user_id == self._user_id,
+            ReviewTask.action_type == ReviewActionType.CREATE_APPLICATION,
+            ReviewTask.status == ReviewTaskStatus.PENDING,
+        ]
+        if exclude_email_id is not None:
+            conditions.append(ReviewTask.source_email_id != exclude_email_id)
+
+        pending_tasks = list(
+            self._session.scalars(
+                select(ReviewTask).where(*conditions).order_by(ReviewTask.created_at.asc())
+            )
+        )
+        if not pending_tasks:
+            return None
+
+        normalized_sender = sender_address.strip().casefold()
+        for task in pending_tasks:
+            payload = task.proposed_payload
+            task_company = (payload.get("company_name") or "").strip().casefold()
+            if company_name and task_company:
+                # 使用模糊匹配，去除标点后比较
+                import re as _re
+                norm_payload_company = _re.sub(r"[\W_]+", "", task_company)
+                norm_analysis_company = _re.sub(r"[\W_]+", "", (company_name or "").casefold())
+                if norm_payload_company and norm_payload_company == norm_analysis_company:
+                    return task.id
+            # 同一发件人的也视为候选（同公司多岗位场景）
+            if normalized_sender:
+                task_sender = self._email_sender(task.source_email_id)
+                if task_sender and task_sender.casefold() == normalized_sender:
+                    return task.id
+        return None
+
+    def _email_sender(self, email_id: int | None) -> str | None:
+        if email_id is None:
+            return None
+        email = self._session.get(Email, email_id)
+        return email.from_address if email else None
+
+    def _resolve_deferred_application(self, source_review_task_id: str) -> JobApplication | None:
+        """从源审核任务的执行结果中解析已创建的申请。"""
+        execution = self._session.scalar(
+            select(ActionExecution)
+            .where(ActionExecution.review_task_id == source_review_task_id)
+            .order_by(ActionExecution.attempt_no.desc())
+            .limit(1)
+        )
+        if execution is None or execution.result is None:
+            return None
+        application_id = execution.result.get("application_id")
+        if not isinstance(application_id, int):
+            return None
+        return self._session.get(JobApplication, application_id)
 
     @staticmethod
     def _response_from_task(task: ReviewTask) -> ApplicationMatchResponse:
@@ -607,8 +695,16 @@ class ReviewTaskService:
     ) -> None:
         if task.action_type is ReviewActionType.LINK_APPLICATION:
             application_id = payload.get("application_id")
+            deferred_source = payload.get("deferred_source_review_task_id")
+            # 支持推迟关联：有 deferred_source 时不需要在载荷中直接提供 application_id
             if not isinstance(application_id, int) or application_id <= 0:
-                raise ResourceConflictError("批准关联申请时必须明确 application_id")
+                if not isinstance(deferred_source, str) or not deferred_source:
+                    raise ResourceConflictError("批准关联申请时必须明确 application_id 或推迟关联源")
+                # 验证推迟源存在且已执行成功
+                source_task = self._session.get(ReviewTask, deferred_source)
+                if source_task is None or source_task.user_id != self._user_id:
+                    raise ResourceConflictError("推迟关联引用的审核任务不存在")
+                return
             application = self._owned_application(application_id)
             expected_version = payload.get("application_version")
             if expected_version is not None and application.version != expected_version:
@@ -693,6 +789,22 @@ class ReviewTaskService:
                 raise ResourceConflictError("批准回复时正文不能为空")
             if len(body) > 20_000:
                 raise ResourceConflictError("回复正文超过长度限制")
+        elif task.action_type is ReviewActionType.UPDATE_INTERVIEW_RESULT:
+            application = self._owned_application(task.application_id)
+            if application.version != task.resource_version:
+                raise VersionConflictError(
+                    f"Resource version changed: expected {task.resource_version}, "
+                    f"actual {application.version}"
+                )
+            round_number = payload.get("round_number")
+            if not isinstance(round_number, int) or not 1 <= round_number <= 20:
+                raise ResourceConflictError("面试结果审核必须包含有效的面试轮次")
+            result = _interview_result(payload.get("result"))
+            if result is None:
+                raise ResourceConflictError("面试结果审核必须包含有效的结果值")
+            source_email_id = payload.get("source_email_id")
+            if source_email_id is not None:
+                self._owned_email(source_email_id)
         elif task.action_type in {
             ReviewActionType.ARCHIVE_EMAIL,
             ReviewActionType.RESTORE_EMAIL,
@@ -773,24 +885,83 @@ class ReviewTaskService:
                 )
             )
         else:
-            application = self._owned_application(payload["application_id"])
+            # 推迟关联的审核载荷中没有直接的 application_id
+            deferred = payload.get("deferred_source_review_task_id")
+            if deferred and payload.get("application_id") is None:
+                application = None  # 稍后由 _resolve_deferred_application 解析
+            else:
+                application = self._owned_application(payload["application_id"])
 
         if task.action_type in {
             ReviewActionType.CREATE_APPLICATION,
             ReviewActionType.LINK_APPLICATION,
         }:
+            # 支持推迟关联：如果 application_id 为空但有 deferred_source，
+            # 从源审核任务的执行结果中解析已创建的申请
+            effective_application = application
+            deferred_source = payload.get("deferred_source_review_task_id")
+            if deferred_source and application is None:
+                effective_application = self._resolve_deferred_application(deferred_source)
+            if effective_application is None:
+                raise ResourceConflictError("无法解析推迟关联的目标申请，请先批准对应的新建申请审核")
+
             email = self._owned_email(task.source_email_id)
-            email.application_id = application.id
-            task.application_id = application.id
+            email.application_id = effective_application.id
+            task.application_id = effective_application.id
             self._session.add(
                 ApplicationEvent(
-                    application_id=application.id,
+                    application_id=effective_application.id,
                     source_email_id=email.id,
                     workflow_run_id=task.workflow_run_id,
                     event_type="EMAIL_LINKED",
                     details={
                         "review_task_id": task.id,
                         "analysis_id": payload.get("analysis_id"),
+                    },
+                )
+            )
+            return effective_application
+
+        if task.action_type is ReviewActionType.UPDATE_INTERVIEW_RESULT:
+            round_number = int(payload["round_number"])
+            result = _interview_result(payload["result"])
+            previous_result = application.interview_result
+            source_email_id = payload.get("source_email_id") or task.source_email_id
+            self._upsert_interview_round(
+                application_id=application.id,
+                round_number=round_number,
+                result=result,
+                source=(
+                    InterviewRoundSource.EMAIL
+                    if source_email_id
+                    else InterviewRoundSource.MANUAL
+                ),
+                source_email_id=source_email_id,
+                notes=payload.get("reason"),
+            )
+            # 根据本轮结果收敛关联的面试日程
+            if result in {InterviewResult.PASSED, InterviewResult.FAILED}:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=TaskStatus.COMPLETED,
+                    current_round_only=True,
+                )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    source_email_id=source_email_id,
+                    workflow_run_id=task.workflow_run_id,
+                    event_type="INTERVIEW_RESULT_CHANGED",
+                    previous_stage=application.current_stage,
+                    confirmed_stage=application.current_stage,
+                    details={
+                        "review_task_id": task.id,
+                        "round_number": round_number,
+                        "previous_result": (
+                            previous_result.value if previous_result else None
+                        ),
+                        "interview_result": result.value,
                     },
                 )
             )
@@ -802,11 +973,27 @@ class ReviewTaskService:
         application.current_stage = proposed
         extracted_result = _interview_result(payload.get("interview_result"))
         if proposed is ApplicationStage.INTERVIEW and extracted_result is not None:
-            application.interview_result = extracted_result
+            # 仅在首次进入面试阶段（非 INTERVIEW→INTERVIEW），或结果为通过/未通过时更新
+            if previous is not ApplicationStage.INTERVIEW:
+                application.interview_result = extracted_result
+            elif extracted_result in (InterviewResult.PASSED, InterviewResult.FAILED):
+                application.interview_result = extracted_result
+            # 同一面试阶段内 PENDING 不覆盖已确认的结果
         elif proposed is ApplicationStage.REJECTED and previous is ApplicationStage.INTERVIEW:
             application.interview_result = InterviewResult.FAILED
         elif proposed is ApplicationStage.OFFER and previous is ApplicationStage.INTERVIEW:
             application.interview_result = InterviewResult.PASSED
+
+        # 将阶段变更中隐含的面试结果同步到 interview_rounds 表
+        if previous is ApplicationStage.INTERVIEW or proposed is ApplicationStage.INTERVIEW:
+            self._sync_stage_result_to_rounds(
+                application,
+                previous=previous,
+                proposed=proposed,
+                extracted_result=extracted_result,
+                source_review_task_id=task.id,
+                source_email_id=task.source_email_id,
+            )
 
         if application.interview_result is InterviewResult.FAILED:
             application.status = ApplicationStatus.CLOSED
@@ -876,7 +1063,10 @@ class ReviewTaskService:
         proposed_value = payload.get("proposed_stage")
         if (
             not proposed_value
-            or source_task.action_type is ReviewActionType.UPDATE_APPLICATION_STAGE
+            or source_task.action_type in {
+                ReviewActionType.UPDATE_APPLICATION_STAGE,
+                ReviewActionType.UPDATE_INTERVIEW_RESULT,
+            }
         ):
             return None
         proposed = _application_stage(proposed_value)
@@ -889,7 +1079,45 @@ class ReviewTaskService:
         )
         if validation.status is StageTransitionStatus.NO_CHANGE:
             if result_change:
-                pass
+                # 仅面试结果变化，创建专门的面试结果更新审核
+                round_number = payload.get("interview_round")
+                if not isinstance(round_number, int) or not 1 <= round_number <= 20:
+                    round_number = self._session.scalar(
+                        select(func.max(InterviewRound.round_number)).where(
+                            InterviewRound.application_id == application.id,
+                        )
+                    ) or 0
+                    if round_number < 1:
+                        round_number = 1
+                follow_up = ReviewTask(
+                    id=str(uuid4()),
+                    user_id=self._user_id,
+                    workflow_run_id=source_task.workflow_run_id,
+                    source_email_id=source_task.source_email_id,
+                    application_id=application.id,
+                    action_type=ReviewActionType.UPDATE_INTERVIEW_RESULT,
+                    risk_level=RiskLevel.HIGH,
+                    proposed_payload={
+                        "schema_version": "interview-result-review.v1",
+                        "application_id": application.id,
+                        "company_name": application.company_name,
+                        "position_name": application.position_name,
+                        "round_number": round_number,
+                        "result": result.value,
+                        "summary": payload.get("summary"),
+                        "source_email_id": source_task.source_email_id,
+                        "source_review_task_id": source_task.id,
+                    },
+                    status=ReviewTaskStatus.PENDING,
+                    idempotency_key=(
+                        f"interview-result:{source_task.id}:{application.id}:"
+                        f"{round_number}:{result.value}"
+                    ),
+                    resource_version=application.version,
+                )
+                self._session.add(follow_up)
+                self._session.flush()
+                return follow_up
             else:
                 self._session.add(
                     ApplicationEvent(
@@ -1060,10 +1288,156 @@ class ReviewTaskService:
         )
         self._session.add(task)
         application = self._owned_application(review_task.application_id)
-        application.interview_result = InterviewResult.PENDING
+        # 更新或新建对应轮次的 interview_rounds 记录
+        # 注意：不覆盖已有的确定结果（PASSED/FAILED），仅填补缺失或更新日程信息
+        existing_round = self._session.scalar(
+            select(InterviewRound).where(
+                InterviewRound.application_id == application.id,
+                InterviewRound.round_number == int(payload["interview_round"]),
+            )
+        )
+        result_for_round = (
+            existing_round.result
+            if existing_round is not None and existing_round.result is not InterviewResult.PENDING
+            else InterviewResult.PENDING
+        )
+        self._upsert_interview_round(
+            application_id=application.id,
+            round_number=int(payload["interview_round"]),
+            result=result_for_round,
+            interview_date=_review_datetime(payload.get("start_at")),
+            location=_optional_text(payload.get("location")),
+            meeting_url=_optional_text(payload.get("meeting_url")),
+            source=(
+                InterviewRoundSource.EMAIL
+                if review_task.source_email_id
+                else InterviewRoundSource.MANUAL
+            ),
+            source_email_id=review_task.source_email_id,
+            source_task_id=task.id,
+        )
         application.status = ApplicationStatus.ACTIVE
         self._session.flush()
         return task
+
+    def _upsert_interview_round(
+        self,
+        *,
+        application_id: int,
+        round_number: int,
+        result: InterviewResult = InterviewResult.PENDING,
+        interview_date: datetime | None = None,
+        location: str | None = None,
+        meeting_url: str | None = None,
+        source: InterviewRoundSource = InterviewRoundSource.MANUAL,
+        source_email_id: int | None = None,
+        source_task_id: int | None = None,
+        notes: str | None = None,
+    ) -> InterviewRound:
+        """创建或更新面试轮次记录，并同步 JobApplication.interview_result 缓存。"""
+        existing = self._session.scalar(
+            select(InterviewRound).where(
+                InterviewRound.application_id == application_id,
+                InterviewRound.round_number == round_number,
+            )
+        )
+        if existing is not None:
+            existing.result = result
+            if interview_date is not None:
+                existing.interview_date = interview_date
+            if location is not None:
+                existing.location = location
+            if meeting_url is not None:
+                existing.meeting_url = meeting_url
+            if source_email_id is not None:
+                existing.source_email_id = source_email_id
+            if source_task_id is not None:
+                existing.source_task_id = source_task_id
+            if notes is not None:
+                existing.notes = notes
+            existing.source = source
+            self._session.flush()
+            self._sync_application_interview_result(application_id)
+            return existing
+
+        round_record = InterviewRound(
+            application_id=application_id,
+            round_number=round_number,
+            result=result,
+            interview_date=interview_date,
+            location=location,
+            meeting_url=meeting_url,
+            source=source,
+            source_email_id=source_email_id,
+            source_task_id=source_task_id,
+            notes=notes,
+        )
+        self._session.add(round_record)
+        self._session.flush()
+        self._sync_application_interview_result(application_id)
+        return round_record
+
+    def _sync_application_interview_result(self, application_id: int) -> None:
+        """将最新轮次的结果同步到 JobApplication.interview_result 缓存字段。"""
+        latest = self._session.scalar(
+            select(InterviewRound)
+            .where(InterviewRound.application_id == application_id)
+            .order_by(InterviewRound.round_number.desc())
+            .limit(1)
+        )
+        application = self._owned_application(application_id)
+        application.interview_result = latest.result if latest else None
+        self._session.flush()
+
+    def _sync_stage_result_to_rounds(
+        self,
+        application: JobApplication,
+        *,
+        previous: ApplicationStage,
+        proposed: ApplicationStage,
+        extracted_result: InterviewResult | None,
+        source_review_task_id: str,
+        source_email_id: int | None,
+    ) -> None:
+        """阶段变更中隐含的面试结果同步到 interview_rounds 的最新轮次。"""
+        # 确定本轮面试的轮次号
+        latest_round = self._session.scalar(
+            select(func.max(InterviewRound.round_number)).where(
+                InterviewRound.application_id == application.id,
+            )
+        )
+        # 仅在首次进入面试阶段时创建新轮次，同一阶段内只更新最新轮次
+        if proposed is ApplicationStage.INTERVIEW and previous is not ApplicationStage.INTERVIEW:
+            round_number = (latest_round or 0) + 1
+        else:
+            round_number = max(latest_round or 0, 1)
+
+        # 确定当前阶段对应的结果
+        if proposed is ApplicationStage.REJECTED and previous is ApplicationStage.INTERVIEW:
+            result = InterviewResult.FAILED
+        elif proposed is ApplicationStage.OFFER and previous is ApplicationStage.INTERVIEW:
+            result = InterviewResult.PASSED
+        elif extracted_result is not None:
+            # 同一面试阶段内，仅接受明确的通过/未通过结果，PENDING 不覆盖已有确定结果
+            if previous is ApplicationStage.INTERVIEW and proposed is ApplicationStage.INTERVIEW:
+                if extracted_result not in (InterviewResult.PASSED, InterviewResult.FAILED):
+                    return
+            result = extracted_result
+        else:
+            return
+
+        self._upsert_interview_round(
+            application_id=application.id,
+            round_number=round_number,
+            result=result,
+            source=(
+                InterviewRoundSource.EMAIL
+                if source_email_id
+                else InterviewRoundSource.MANUAL
+            ),
+            source_email_id=source_email_id,
+            notes=f"审核任务 {source_review_task_id} 阶段从 {previous.value} 迁移到 {proposed.value}",
+        )
 
     def _existing_response(self, task: ReviewTask) -> ReviewDecisionResponse:
         execution = self._session.scalar(
@@ -1283,11 +1657,14 @@ def _application_review_action(
 ) -> ReviewActionType:
     if suggestion.recommendation is ApplicationRecommendation.CREATE_NEW:
         return ReviewActionType.CREATE_APPLICATION
-    if (
-        suggestion.recommendation is ApplicationRecommendation.NEEDS_CONFIRMATION
-        and not candidates
-    ):
-        return ReviewActionType.CREATE_APPLICATION
+    if suggestion.recommendation is ApplicationRecommendation.NEEDS_CONFIRMATION:
+        # 检查候选列表是否包含有意义的高分匹配（≥0.5）
+        good_candidates = [
+            c for c in candidates if c.deterministic_score >= 0.5
+        ]
+        if not good_candidates:
+            # 没有高分候选 → 新建申请，等用户确认公司/岗位
+            return ReviewActionType.CREATE_APPLICATION
     return ReviewActionType.LINK_APPLICATION
 
 
@@ -1361,6 +1738,29 @@ def _interview_result(value: Any) -> InterviewResult | None:
         return InterviewResult(value)
     except (TypeError, ValueError) as exc:
         raise ResourceConflictError("审核载荷中的 interview_result 无效") from exc
+
+
+def _infer_round_from_extraction(
+    extraction: dict[str, Any],
+    application: JobApplication | None,
+) -> int | None:
+    """从抽取结果推断面试轮次，优先使用模型输出的 round_number。"""
+    result_payload = extraction.get("interview_result")
+    if isinstance(result_payload, dict):
+        round_num = result_payload.get("round_number")
+        if isinstance(round_num, int) and 1 <= round_num <= 20:
+            return round_num
+    # 回退到从摘要和事件类型文本中解析
+    text_parts = []
+    for key in ("event_type", "summary"):
+        value = extraction.get(key)
+        if isinstance(value, dict) and isinstance(value.get("value"), str):
+            text_parts.append(value["value"])
+    combined = " ".join(text_parts)
+    parsed = _parse_interview_round(combined)
+    if parsed is not None:
+        return parsed
+    return None
 
 
 def _extracted_interview_result(extraction: dict[str, Any]) -> str | None:
