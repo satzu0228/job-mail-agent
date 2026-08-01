@@ -27,16 +27,18 @@ from app.application.email_analysis import (
     PersistEmailAnalysis,
     prepare_email,
 )
-from app.application.reply import ReplyGenerationService, ReplyRunner
+from app.application.reply import ReplyGenerationService, ReplyRunner, ReplySendService
 from app.application.schemas import (
     ReplyGenerationRequest,
+    ReplySendRequest,
     ReviewDecision,
     ReviewDecisionResponse,
     ReviewTaskRead,
     WorkflowRunRead,
 )
-from app.domain.enums import EmailParseStatus, ReviewTaskStatus, WorkflowRunStatus
+from app.domain.enums import EmailParseStatus, ExecutionStatus, ReviewTaskStatus, WorkflowRunStatus
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
+from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
 from app.infrastructure.db.models.user import User
 from app.infrastructure.db.models.workflow_run import WorkflowRun
@@ -258,10 +260,24 @@ class DatabaseWorkflowOperations:
                     rejected=True,
                 )
             if action_type.value == "SEND_REPLY":
+                if draft_id is None:
+                    raise ResourceConflictError("回复草稿不存在，无法发送")
+                draft = session.get(ReplyDraft, draft_id)
+                if draft is None:
+                    raise ResourceConflictError("回复草稿不存在，无法发送")
+                sent = ReplySendService(session, self._user_id).send(
+                    draft_id,
+                    ReplySendRequest(
+                        draft_version=draft.version,
+                        idempotency_key=f"workflow:{review_task_id}",
+                    ),
+                )
+                if sent.execution.status is not ExecutionStatus.SUCCEEDED:
+                    raise ResourceConflictError("回复发送未成功，请检查邮箱配置后重试")
                 return ReviewExecutionOutcome(
                     review_task_id=review_task_id,
                     action_type=action_type.value,
-                    result={"draft_id": draft_id},
+                    result=sent.execution.result,
                 )
             response = service.execute_decided(
                 review_task_id,

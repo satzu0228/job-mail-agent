@@ -26,6 +26,8 @@ from app.application.schemas import (
     ReviewTaskRead,
 )
 from app.domain.enums import (
+    ArchiveStatus,
+    EmailParseStatus,
     ExecutionStatus,
     ExecutorType,
     ReplyDraftStatus,
@@ -394,6 +396,40 @@ class ReplySendService:
                 "recipient_count": len(draft.to_recipients)
                 + len(draft.cc_recipients),
             }
+            # SMTP 成功后同步写入本地已发送记录，避免客户端永远显示为空。
+            now = _utc_now()
+            sent_email = self._session.scalar(
+                select(Email).where(
+                    Email.account_id == account.id,
+                    Email.source_folder == "SENT",
+                    Email.uid_validity == 0,
+                    Email.imap_uid == draft.id,
+                )
+            )
+            if sent_email is None:
+                self._session.add(
+                    Email(
+                        account_id=account.id,
+                        application_id=draft.application_id,
+                        source_folder="SENT",
+                        current_folder="SENT",
+                        uid_validity=0,
+                        imap_uid=draft.id,
+                        message_id=external_reference,
+                        subject=draft.subject,
+                        from_address=account.email_address,
+                        to_recipients=draft.to_recipients,
+                        cc_recipients=draft.cc_recipients,
+                        sent_at=now,
+                        received_at=now,
+                        plain_body=body,
+                        html_sanitized=body,
+                        analysis_text=body,
+                        attachment_metadata=[],
+                        parse_status=EmailParseStatus.SUCCEEDED,
+                        archive_status=ArchiveStatus.NONE,
+                    )
+                )
             task.status = ReviewTaskStatus.SUCCEEDED
         execution.finished_at = _utc_now()
         self._session.commit()
