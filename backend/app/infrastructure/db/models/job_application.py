@@ -12,6 +12,7 @@ from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
     InterviewResult,
+    OfferResult,
 )
 from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin, varchar_enum
 
@@ -66,6 +67,10 @@ class JobApplication(TimestampMixin, Base):
     )
     interview_result: Mapped[InterviewResult | None] = mapped_column(
         varchar_enum(InterviewResult, name="interview_result", length=16),
+        nullable=True,
+    )
+    offer_result: Mapped[OfferResult | None] = mapped_column(
+        varchar_enum(OfferResult, name="offer_result", length=16),
         nullable=True,
     )
     source: Mapped[ApplicationSource] = mapped_column(

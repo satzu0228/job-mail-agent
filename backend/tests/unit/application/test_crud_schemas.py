@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.application.crud import BusinessCrudService
 from app.application.schemas import (
     JobApplicationInterviewResultUpdate,
+    JobApplicationNextInterviewCreate,
     JobApplicationStageTransition,
     JobApplicationUpdate,
     TaskCreate,
@@ -196,6 +197,70 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
     assert event.event_type == "INTERVIEW_RESULT_CHANGED"
     assert event.details["previous_result"] == "PENDING"
     assert event.details["interview_result"] == "FAILED"
+
+
+def test_schedule_next_interview_increments_any_round_and_resets_result() -> None:
+    application = SimpleNamespace(
+        id=9,
+        version=3,
+        current_stage=ApplicationStage.INTERVIEW,
+        interview_result=InterviewResult.PASSED,
+        status=ApplicationStatus.ACTIVE,
+    )
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        def begin(self):
+            return nullcontext()
+
+        def scalar(self, statement):
+            return 2
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeTasks:
+        def __init__(self) -> None:
+            self.task = None
+
+        def add(self, task):
+            task.id = 31
+            self.task = task
+            return task
+
+    session = FakeSession()
+    tasks = FakeTasks()
+    service = BusinessCrudService.__new__(BusinessCrudService)
+    service._session = session  # type: ignore[assignment]
+    service._user_id = 1
+    service.applications = SimpleNamespace(
+        get=lambda application_id, for_update: application
+    )
+    service.tasks = tasks  # type: ignore[assignment]
+
+    updated, task = service.schedule_next_interview(
+        9,
+        JobApplicationNextInterviewCreate(
+            version=3,
+            title="启明智联三面",
+            start_at=datetime(2026, 8, 8, 14, 0, tzinfo=UTC),
+            source_timezone="Asia/Shanghai",
+            reason="招聘人员电话通知",
+        ),
+    )
+
+    assert updated.interview_result is InterviewResult.PENDING
+    assert task.interview_round == 3
+    assert task.status is TaskStatus.CONFIRMED
+    event = session.added[0]
+    assert event.event_type == "NEXT_INTERVIEW_SCHEDULED"
+    assert event.details["interview_round"] == 3
+    assert event.details["interview_result"] == "PENDING"
 
 
 def test_aware_datetime_is_normalized_to_naive_utc_for_mysql() -> None:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar as CalendarIcon, List, Location, Link } from '@element-plus/icons-vue'
+import { Calendar as CalendarIcon, List, Link, Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
@@ -8,7 +8,7 @@ import { applicationApi, reminderApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import { taskStatusMeta, taskTypeMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
-import type { JobApplication, Reminder, Task, TaskStatus } from '@/types/api'
+import type { JobApplication, Reminder, Task, TaskCreate, TaskStatus, TaskType } from '@/types/api'
 
 type ViewMode = 'list' | 'month'
 type InterviewAction = 'reschedule' | 'withdraw'
@@ -28,6 +28,29 @@ const interviewAction = ref<InterviewAction>('reschedule')
 const rescheduleAt = ref('')
 const rescheduleMeetingUrl = ref('')
 const withdrawReason = ref('')
+const createVisible = ref(false)
+const creating = ref(false)
+const createForm = ref<{
+  application_id: number | null
+  task_type: TaskType
+  interview_round: number | null
+  title: string
+  start_at: string
+  deadline_at: string
+  location: string
+  meeting_url: string
+  description: string
+}>({
+  application_id: null,
+  task_type: 'INTERVIEW',
+  interview_round: 1,
+  title: '',
+  start_at: '',
+  deadline_at: '',
+  location: '',
+  meeting_url: '',
+  description: '',
+})
 
 const visibleTasks = computed(() =>
   tasks.value
@@ -93,6 +116,61 @@ async function loadData() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+function openCreateTask() {
+  createForm.value = {
+    application_id: null,
+    task_type: 'INTERVIEW',
+    interview_round: 1,
+    title: '',
+    start_at: '',
+    deadline_at: '',
+    location: '',
+    meeting_url: '',
+    description: '',
+  }
+  createVisible.value = true
+}
+
+async function createTask() {
+  const form = createForm.value
+  if (!form.title.trim()) {
+    ElMessage.warning('请填写日程标题')
+    return
+  }
+  if (!form.start_at && !form.deadline_at) {
+    ElMessage.warning('请选择开始时间或截止时间')
+    return
+  }
+  if (form.task_type === 'INTERVIEW' && !form.interview_round) {
+    ElMessage.warning('请填写面试轮次')
+    return
+  }
+  creating.value = true
+  try {
+    const payload: TaskCreate = {
+      application_id: form.application_id,
+      task_type: form.task_type,
+      interview_round: form.task_type === 'INTERVIEW' ? form.interview_round : null,
+      title: form.title.trim(),
+      start_at: form.start_at ? new Date(form.start_at).toISOString() : null,
+      deadline_at: form.deadline_at ? new Date(form.deadline_at).toISOString() : null,
+      source_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+      location: form.location.trim() || null,
+      meeting_url: form.meeting_url.trim() || null,
+      description: form.description.trim() || null,
+      status: 'CONFIRMED',
+    }
+    const created = await taskApi.create(payload)
+    tasks.value = [created, ...tasks.value]
+    createVisible.value = false
+    ElMessage.success('日程已创建')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    creating.value = false
   }
 }
 
@@ -213,6 +291,7 @@ onMounted(loadData)
           :value="value"
         />
       </ElSelect>
+      <ElButton type="primary" :icon="Plus" @click="openCreateTask">新建日程</ElButton>
     </div>
 
     <section v-if="reminders.length" class="reminder-strip">
@@ -453,6 +532,74 @@ onMounted(loadData)
         </ElButton>
       </template>
     </ElDialog>
+
+    <ElDialog v-model="createVisible" title="新建日程" width="min(560px, 92vw)">
+      <ElForm label-position="top">
+        <div class="create-task-grid">
+          <ElFormItem label="日程类型" required>
+            <ElSelect v-model="createForm.task_type" class="full-width">
+              <ElOption
+                v-for="(meta, value) in taskTypeMeta"
+                :key="value"
+                :label="meta.label"
+                :value="value"
+              />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="关联申请">
+            <ElSelect
+              v-model="createForm.application_id"
+              clearable
+              filterable
+              class="full-width"
+              placeholder="可选"
+            >
+              <ElOption
+                v-for="application in applications.filter((item) => item.status === 'ACTIVE')"
+                :key="application.id"
+                :label="`${application.company_name} · ${application.position_name}`"
+                :value="application.id"
+              />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="标题" required>
+            <ElInput v-model="createForm.title" placeholder="例如：字节跳动一面" />
+          </ElFormItem>
+          <ElFormItem v-if="createForm.task_type === 'INTERVIEW'" label="面试轮次" required>
+            <ElInputNumber v-model="createForm.interview_round" :min="1" :max="20" class="full-width" />
+          </ElFormItem>
+          <ElFormItem label="开始时间">
+            <ElDatePicker
+              v-model="createForm.start_at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              class="full-width"
+            />
+          </ElFormItem>
+          <ElFormItem label="截止时间">
+            <ElDatePicker
+              v-model="createForm.deadline_at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              class="full-width"
+            />
+          </ElFormItem>
+          <ElFormItem label="地点">
+            <ElInput v-model="createForm.location" />
+          </ElFormItem>
+          <ElFormItem label="会议链接">
+            <ElInput v-model="createForm.meeting_url" />
+          </ElFormItem>
+        </div>
+        <ElFormItem label="说明">
+          <ElInput v-model="createForm.description" type="textarea" :rows="3" />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="createVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="creating" @click="createTask">保存日程</ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -495,6 +642,16 @@ onMounted(loadData)
 
 .status-filter {
   width: 130px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.create-task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 14px;
 }
 
 .calendar-surface {

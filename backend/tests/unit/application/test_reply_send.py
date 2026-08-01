@@ -21,6 +21,9 @@ class FakeSession:
     def commit(self) -> None:
         self.commits += 1
 
+    def scalar(self, statement: object) -> object | None:
+        return None
+
 
 class FakeMailer:
     def __init__(self) -> None:
@@ -40,6 +43,7 @@ class FakeCredentialResolver:
 
 def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     account = SimpleNamespace(
+        id=1,
         email_address="candidate@example.com",
         credential_ref="JOB_MAIL_EMAIL_CREDENTIAL_TEST",
         smtp_security=TransportSecurity.SSL,
@@ -50,6 +54,7 @@ def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     )
     draft = SimpleNamespace(
         id=3,
+        application_id=None,
         version=2,
         status=ReplyDraftStatus.APPROVED,
         to_recipients=[{"address": "hr@example.com"}],

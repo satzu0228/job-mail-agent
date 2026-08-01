@@ -316,6 +316,17 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
+function pageResult<T>(items: T[], url: URL) {
+  const offset = Number(url.searchParams.get('offset') ?? 0)
+  const limit = Number(url.searchParams.get('limit') ?? 100)
+  return {
+    items: items.slice(offset, offset + limit),
+    total: items.length,
+    offset,
+    limit,
+  }
+}
+
 export async function installMockApi(page: Page, options: MockOptions = {}) {
   const state = {
     accounts: options.empty ? [] : [structuredClone(account)],
@@ -388,7 +399,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
     }
     if (method === 'GET' && path === '/emails') return json(route, state.emails)
     if (method === 'GET' && path === '/emails/query') {
-      return json(route, { items: state.emails, total: state.emails.length, offset: 0, limit: 100 })
+      return json(route, pageResult(state.emails, url))
     }
     const emailMatch = path.match(/^\/emails\/(\d+)$/)
     if (method === 'GET' && emailMatch) {
@@ -466,6 +477,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
     if (method === 'GET' && path === '/job-applications') {
       return json(route, state.applications)
     }
+    if (method === 'GET' && path === '/job-applications/query') {
+      return json(route, pageResult(state.applications, url))
+    }
     if (method === 'POST' && path === '/job-applications') {
       const created = {
         ...applications[0],
@@ -519,6 +533,40 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
       }
       return json(route, item)
     }
+    const nextInterviewMatch = path.match(
+      /^\/job-applications\/(\d+)\/next-interview$/,
+    )
+    if (method === 'POST' && nextInterviewMatch) {
+      const item = state.applications.find(
+        (value) => value.id === Number(nextInterviewMatch[1]),
+      )
+      const payload = request.postDataJSON()
+      const currentRound = Math.max(
+        0,
+        ...state.tasks
+          .filter((task) => task.application_id === item?.id && task.task_type === 'INTERVIEW')
+          .map((task) => task.interview_round ?? 0),
+      )
+      const task = {
+        ...tasks[0],
+        ...payload,
+        id: Math.max(0, ...state.tasks.map((value) => value.id)) + 1,
+        application_id: item?.id ?? null,
+        source_email_id: null,
+        interview_round: currentRound + 1,
+        status: 'CONFIRMED',
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      }
+      if (item) {
+        item.interview_result = 'PENDING'
+        item.status = 'ACTIVE'
+        item.version += 1
+      }
+      state.tasks.push(task)
+      return json(route, { application: item, task })
+    }
     const applicationMatch = path.match(/^\/job-applications\/(\d+)$/)
     if (method === 'PATCH' && applicationMatch) {
       const item = state.applications.find((value) => value.id === Number(applicationMatch[1]))
@@ -551,6 +599,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
       })
     }
     if (method === 'GET' && path === '/tasks') return json(route, state.tasks)
+    if (method === 'GET' && path === '/tasks/query') {
+      return json(route, pageResult(state.tasks, url))
+    }
     const taskMatch = path.match(/^\/tasks\/(\d+)$/)
     if (method === 'PATCH' && taskMatch) {
       const item = state.tasks.find((value) => value.id === Number(taskMatch[1]))
@@ -586,6 +637,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
       return json(route, item)
     }
     if (method === 'GET' && path === '/review-tasks') return json(route, state.reviews)
+    if (method === 'GET' && path === '/review-tasks/query') {
+      return json(route, pageResult(state.reviews, url))
+    }
     const reviewDetailMatch = path.match(/^\/review-tasks\/([^/]+)$/)
     if (method === 'GET' && reviewDetailMatch) {
       return json(route, state.reviews.find((item) => item.id === reviewDetailMatch[1]))

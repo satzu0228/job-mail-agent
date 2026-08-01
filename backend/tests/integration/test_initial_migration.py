@@ -14,10 +14,10 @@ def make_alembic_config() -> Config:
     return config
 
 
-def test_seventh_migration_is_the_only_head() -> None:
+def test_eighth_migration_is_the_only_head() -> None:
     scripts = ScriptDirectory.from_config(make_alembic_config())
 
-    assert scripts.get_current_head() == "20260801_0007"
+    assert scripts.get_current_head() == "20260801_0008"
 
 
 def test_initial_migration_generates_ordered_mysql_sql() -> None:
@@ -42,6 +42,7 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
         sql.index("CREATE TABLE action_executions"),
         sql.index("CREATE TABLE automation_rules"),
         sql.index("CREATE TABLE reminders"),
+        sql.index("CREATE TABLE automation_rule_runs"),
     ]
 
     assert table_positions == sorted(table_positions)
@@ -58,6 +59,8 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
     assert "uq_reminders_task_id" in sql
     assert "current_uid_validity BIGINT UNSIGNED" in sql
     assert "ix_emails_current_imap_pointer" in sql
+    assert "offer_result VARCHAR(16)" in sql
+    assert "uq_automation_rule_runs_rule_email_analysis" in sql
 
 
 def test_initial_migration_downgrades_in_reverse_dependency_order() -> None:

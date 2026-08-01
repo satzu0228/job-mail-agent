@@ -25,6 +25,7 @@ import type {
   InterviewResult,
   JobApplication,
   JobApplicationCreate,
+  OfferResult,
   Task,
 } from '@/types/api'
 
@@ -41,12 +42,18 @@ const drawerVisible = ref(false)
 const createVisible = ref(false)
 const stageVisible = ref(false)
 const resultVisible = ref(false)
+const offerVisible = ref(false)
+const reopenVisible = ref(false)
+const nextInterviewVisible = ref(false)
 const selected = ref<JobApplication | null>(null)
 const applicationEvents = ref<ApplicationEvent[]>([])
 const loadingEvents = ref(false)
 const saving = ref(false)
 const transitioningStage = ref(false)
 const savingResult = ref(false)
+const savingOffer = ref(false)
+const reopening = ref(false)
+const schedulingNextInterview = ref(false)
 const createFormRef = ref<FormInstance>()
 
 const createForm = reactive<JobApplicationCreate>({
@@ -79,6 +86,26 @@ const resultForm = reactive({
   reason: '',
 })
 
+const offerForm = reactive({
+  result: null as OfferResult | null,
+  reason: '',
+})
+
+const reopenForm = reactive({
+  target_stage: 'APPLIED' as Exclude<ApplicationStage, 'REJECTED' | 'WITHDRAWN'>,
+  reason: '',
+})
+
+const nextInterviewForm = reactive({
+  title: '',
+  start_at: '',
+  deadline_at: '',
+  location: '',
+  meeting_url: '',
+  description: '',
+  reason: '',
+})
+
 const interviewResultOptions: Array<{
   value: InterviewResult
   label: string
@@ -99,9 +126,7 @@ const allowedStageTransitions: Record<ApplicationStage, ApplicationStage[]> = {
 }
 
 const availableStages = computed(() =>
-  selected.value && selected.value.current_stage !== 'INTERVIEW'
-    ? allowedStageTransitions[selected.value.current_stage]
-    : [],
+  selected.value ? allowedStageTransitions[selected.value.current_stage] : [],
 )
 
 const rules: FormRules = {
@@ -168,6 +193,13 @@ function interviewTask(applicationId: number): Task | undefined {
     })[0]
 }
 
+function nextInterviewRound(applicationId: number): number {
+  const rounds = relatedTasks(applicationId)
+    .filter((task) => task.task_type === 'INTERVIEW')
+    .map((task) => task.interview_round ?? 0)
+  return Math.max(0, ...rounds) + 1
+}
+
 function applicationStageLabel(application: JobApplication): string {
   if (application.current_stage !== 'INTERVIEW') return stageLabel(application.current_stage)
   return interviewRoundLabel(interviewTask(application.id)?.interview_round ?? null)
@@ -191,6 +223,12 @@ function applicationEventSummary(event: ApplicationEvent): string {
       : '面试'
     return `${round}结果：${interviewResultLabelFromDetails(details.interview_result)}`
   }
+  if (event.event_type === 'NEXT_INTERVIEW_SCHEDULED') {
+    const round = typeof event.details?.interview_round === 'number'
+      ? interviewRoundLabel(event.details.interview_round)
+      : '下一轮面试'
+    return `已登记${round}，本轮结果恢复为待确认`
+  }
   if (event.event_type === 'APPLICATION_WITHDRAWN_FROM_CALENDAR') {
     return '已撤回申请，并取消未完成面试日程'
   }
@@ -205,6 +243,16 @@ function interviewResultLabel(result: InterviewResult | null): string {
 
 function interviewResultClass(result: InterviewResult | null): string {
   return result === 'PASSED' ? 'is-passed' : result === 'FAILED' ? 'is-failed' : 'is-pending'
+}
+
+function offerResultLabel(result: OfferResult | null): string {
+  if (result === 'ACCEPTED') return '已接受 Offer'
+  if (result === 'DECLINED') return '已谢绝 Offer'
+  return '待确认 Offer'
+}
+
+function offerResultClass(result: OfferResult | null): string {
+  return result === 'ACCEPTED' ? 'is-passed' : result === 'DECLINED' ? 'is-failed' : 'is-pending'
 }
 
 function relatedEmails(id: number): EmailListItem[] {
@@ -364,6 +412,7 @@ async function updateInterviewResult() {
     const index = applications.value.findIndex((item) => item.id === updated.id)
     if (index >= 0) applications.value[index] = updated
     selected.value = updated
+    if (updated.interview_result === 'PASSED') drawerVisible.value = true
     if (drawerVisible.value) {
       applicationEvents.value = (await applicationApi.events(updated.id)).items
     }
@@ -373,6 +422,134 @@ async function updateInterviewResult() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     savingResult.value = false
+  }
+}
+
+function openNextInterview() {
+  if (!selected.value) return
+  const round = nextInterviewRound(selected.value.id)
+  Object.assign(nextInterviewForm, {
+    title: `${selected.value.company_name} ${interviewRoundLabel(round)}`,
+    start_at: '',
+    deadline_at: '',
+    location: selected.value.location ?? '',
+    meeting_url: '',
+    description: '',
+    reason: '',
+  })
+  nextInterviewVisible.value = true
+}
+
+function openOfferStage() {
+  stageForm.proposed_stage = 'OFFER'
+  stageForm.reason = ''
+  stageVisible.value = true
+}
+
+async function scheduleNextInterview() {
+  if (!selected.value) return
+  if (!nextInterviewForm.title.trim() || !nextInterviewForm.start_at) {
+    ElMessage.warning('请填写下一轮面试标题和开始时间')
+    return
+  }
+  if (!nextInterviewForm.reason.trim()) {
+    ElMessage.warning('请说明下一轮安排的来源')
+    return
+  }
+  schedulingNextInterview.value = true
+  try {
+    const response = await applicationApi.scheduleNextInterview(selected.value.id, {
+      version: selected.value.version,
+      title: nextInterviewForm.title.trim(),
+      description: nextInterviewForm.description.trim() || null,
+      start_at: new Date(nextInterviewForm.start_at).toISOString(),
+      deadline_at: nextInterviewForm.deadline_at
+        ? new Date(nextInterviewForm.deadline_at).toISOString()
+        : null,
+      source_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+      location: nextInterviewForm.location.trim() || null,
+      meeting_url: nextInterviewForm.meeting_url.trim() || null,
+      reason: nextInterviewForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === response.application.id)
+    if (index >= 0) applications.value[index] = response.application
+    selected.value = response.application
+    tasks.value.push(response.task)
+    applicationEvents.value = (await applicationApi.events(response.application.id)).items
+    nextInterviewVisible.value = false
+    ElMessage.success(`${interviewRoundLabel(response.task.interview_round)}已登记`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    schedulingNextInterview.value = false
+  }
+}
+
+function openOfferResult(application: JobApplication) {
+  selected.value = application
+  offerForm.result = application.offer_result ?? 'PENDING'
+  offerForm.reason = ''
+  offerVisible.value = true
+}
+
+async function updateOfferResult() {
+  if (!selected.value || !offerForm.result) return
+  if (!offerForm.reason.trim()) {
+    ElMessage.warning('请说明 Offer 结果来源')
+    return
+  }
+  savingOffer.value = true
+  try {
+    const updated = await applicationApi.updateOfferResult(selected.value.id, {
+      version: selected.value.version,
+      result: offerForm.result,
+      reason: offerForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === updated.id)
+    if (index >= 0) applications.value[index] = updated
+    selected.value = updated
+    if (drawerVisible.value) {
+      applicationEvents.value = (await applicationApi.events(updated.id)).items
+    }
+    offerVisible.value = false
+    ElMessage.success(`Offer 结果已更新为“${offerResultLabel(updated.offer_result)}”`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    savingOffer.value = false
+  }
+}
+
+function openReopenApplication() {
+  if (!selected.value) return
+  reopenForm.target_stage = selected.value.current_stage === 'OFFER' ? 'OFFER' : 'APPLIED'
+  reopenForm.reason = ''
+  reopenVisible.value = true
+}
+
+async function reopenApplication() {
+  if (!selected.value) return
+  if (!reopenForm.reason.trim()) {
+    ElMessage.warning('请填写重新打开原因')
+    return
+  }
+  reopening.value = true
+  try {
+    const updated = await applicationApi.reopen(selected.value.id, {
+      version: selected.value.version,
+      target_stage: reopenForm.target_stage,
+      reason: reopenForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === updated.id)
+    if (index >= 0) applications.value[index] = updated
+    selected.value = updated
+    applicationEvents.value = (await applicationApi.events(updated.id)).items
+    reopenVisible.value = false
+    ElMessage.success('申请已重新打开')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    reopening.value = false
   }
 }
 
@@ -488,6 +665,20 @@ onMounted(loadData)
             <span v-else class="quiet">—</span>
           </template>
         </ElTableColumn>
+        <ElTableColumn label="Offer 结果" width="136">
+          <template #default="{ row }">
+            <button
+              v-if="row.current_stage === 'OFFER'"
+              type="button"
+              class="result-pill"
+              :class="offerResultClass(row.offer_result)"
+              @click.stop="openOfferResult(row)"
+            >
+              <span />{{ offerResultLabel(row.offer_result) }}
+            </button>
+            <span v-else class="quiet">—</span>
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="投递时间" width="126" sortable>
           <template #default="{ row }">{{ formatDate(row.applied_at) }}</template>
         </ElTableColumn>
@@ -503,6 +694,12 @@ onMounted(loadData)
                 <span>{{ formatDateTime(taskTime(nextTask(row.id)!)) }}</span>
               </div>
             </div>
+            <span
+              v-else-if="row.current_stage === 'INTERVIEW' && row.interview_result === 'PASSED'"
+              class="waiting-next"
+            >
+              下一阶段：待确认
+            </span>
             <span v-else class="quiet">—</span>
           </template>
         </ElTableColumn>
@@ -548,18 +745,49 @@ onMounted(loadData)
             >
               <span />{{ interviewResultLabel(selected.interview_result) }}
             </button>
+            <button
+              v-if="selected.current_stage === 'OFFER'"
+              type="button"
+              class="result-pill"
+              :class="offerResultClass(selected.offer_result)"
+              @click="openOfferResult(selected)"
+            >
+              <span />{{ offerResultLabel(selected.offer_result) }}
+            </button>
           </div>
           <p v-if="interviewTask(selected.id)">
             {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
           </p>
           <ElButton
-            v-if="availableStages.length"
+            v-if="selected.current_stage !== 'INTERVIEW' && availableStages.length"
             type="primary"
             plain
             @click="openStageTransition"
           >
             更新阶段
           </ElButton>
+          <ElButton
+            v-if="selected.status !== 'ACTIVE'"
+            type="primary"
+            plain
+            @click="openReopenApplication"
+          >
+            重新打开
+          </ElButton>
+        </div>
+
+        <div
+          v-if="selected.current_stage === 'INTERVIEW' && selected.interview_result === 'PASSED'"
+          class="next-step-card"
+        >
+          <div>
+            <strong>{{ applicationStageLabel(selected) }}已通过，下一阶段待确认</strong>
+            <span>适用于每一轮面试：收到新安排后登记下一轮，确认录用流程后再进入 Offer。</span>
+          </div>
+          <div class="next-step-actions">
+            <ElButton type="primary" @click="openNextInterview">登记下一轮面试</ElButton>
+            <ElButton plain @click="openOfferStage">进入 Offer</ElButton>
+          </div>
         </div>
 
         <ElTabs>
@@ -695,6 +923,11 @@ onMounted(loadData)
             <small>{{ option.description }}</small>
           </button>
         </div>
+        <div v-if="resultForm.result === 'PASSED'" class="next-stage-preview">
+          <span>保存后的下一阶段</span>
+          <strong>待确认</strong>
+          <small>保存后可继续登记下一轮面试，或确认进入 Offer。</small>
+        </div>
         <label class="result-reason">
           <span>结果来源</span>
           <ElInput
@@ -710,6 +943,127 @@ onMounted(loadData)
         <ElButton @click="resultVisible = false">取消</ElButton>
         <ElButton type="primary" :loading="savingResult" @click="updateInterviewResult">
           保存面试结果
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog
+      v-model="nextInterviewVisible"
+      :title="`登记${selected ? interviewRoundLabel(nextInterviewRound(selected.id)) : '下一轮面试'}`"
+      width="min(580px, 92vw)"
+    >
+      <ElForm label-position="top">
+        <div class="form-grid">
+          <ElFormItem label="日程标题" required>
+            <ElInput v-model="nextInterviewForm.title" />
+          </ElFormItem>
+          <ElFormItem label="面试轮次">
+            <ElInput
+              :model-value="selected ? interviewRoundLabel(nextInterviewRound(selected.id)) : ''"
+              disabled
+            />
+          </ElFormItem>
+          <ElFormItem label="开始时间" required>
+            <ElDatePicker
+              v-model="nextInterviewForm.start_at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              class="full-width"
+              placeholder="选择下一轮面试时间"
+            />
+          </ElFormItem>
+          <ElFormItem label="结束或截止时间">
+            <ElDatePicker
+              v-model="nextInterviewForm.deadline_at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              class="full-width"
+              placeholder="可选"
+            />
+          </ElFormItem>
+          <ElFormItem label="地点">
+            <ElInput v-model="nextInterviewForm.location" />
+          </ElFormItem>
+          <ElFormItem label="会议链接">
+            <ElInput v-model="nextInterviewForm.meeting_url" placeholder="https://..." />
+          </ElFormItem>
+        </div>
+        <ElFormItem label="说明">
+          <ElInput v-model="nextInterviewForm.description" type="textarea" :rows="2" />
+        </ElFormItem>
+        <ElFormItem label="安排来源" required>
+          <ElInput
+            v-model="nextInterviewForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            placeholder="例如：招聘人员电话通知三面时间"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="nextInterviewVisible = false">取消</ElButton>
+        <ElButton
+          type="primary"
+          :loading="schedulingNextInterview"
+          @click="scheduleNextInterview"
+        >
+          保存下一轮日程
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog v-model="offerVisible" title="记录 Offer 结果" width="min(520px, 92vw)">
+      <ElForm label-position="top">
+        <ElFormItem label="结果" required>
+          <ElSelect v-model="offerForm.result" class="full-width">
+            <ElOption label="待确认 Offer" value="PENDING" />
+            <ElOption label="已接受 Offer" value="ACCEPTED" />
+            <ElOption label="已谢绝 Offer" value="DECLINED" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="结果来源" required>
+          <ElInput
+            v-model="offerForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            placeholder="例如：电话确认已接受，或招聘网站中选择谢绝 Offer"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="offerVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="savingOffer" @click="updateOfferResult">
+          保存 Offer 结果
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog v-model="reopenVisible" title="重新打开申请" width="min(520px, 92vw)">
+      <ElForm label-position="top">
+        <ElFormItem label="恢复到阶段" required>
+          <ElSelect v-model="reopenForm.target_stage" class="full-width">
+            <ElOption label="已投递" value="APPLIED" />
+            <ElOption label="笔试" value="ASSESSMENT" />
+            <ElOption label="面试" value="INTERVIEW" />
+            <ElOption label="录用" value="OFFER" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="重新打开原因" required>
+          <ElInput
+            v-model="reopenForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            placeholder="例如：误操作关闭，实际流程仍在继续"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="reopenVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="reopening" @click="reopenApplication">
+          确认重新打开
         </ElButton>
       </template>
     </ElDialog>
@@ -923,6 +1277,11 @@ onMounted(loadData)
   font-size: 11px;
 }
 
+.waiting-next {
+  color: #9a6818;
+  font-size: 12px;
+}
+
 .table-empty {
   padding: 50px 0;
 }
@@ -964,6 +1323,38 @@ onMounted(loadData)
   font-size: 11px;
   text-align: right;
   white-space: nowrap;
+}
+
+.next-step-card {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0 8px;
+  padding: 16px;
+  background: #fff8e8;
+  border: 1px solid #f2d99b;
+  border-radius: 10px;
+}
+
+.next-step-card > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.next-step-card strong {
+  color: #6f4d0f;
+  font-size: 14px;
+}
+
+.next-step-card span {
+  color: #7c6a48;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.next-step-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .result-dialog-heading {
@@ -1018,6 +1409,31 @@ onMounted(loadData)
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.next-stage-preview {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  align-items: baseline;
+  padding: 12px 14px;
+  background: #fff8e8;
+  border-left: 3px solid #d99a2b;
+  border-radius: 4px 9px 9px 4px;
+}
+
+.next-stage-preview span,
+.next-stage-preview small {
+  color: #806b43;
+  font-size: 12px;
+}
+
+.next-stage-preview strong {
+  color: #6f4d0f;
+}
+
+.next-stage-preview small {
+  grid-column: 2;
 }
 
 .result-option {

@@ -123,9 +123,7 @@ test('E2E-07 求职进度显示一面、准确时间和申请时间线', async (
   await page.getByRole('button', { name: '全部' }).click()
   await expect(page.getByText('一面', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('2099/08/05 14:00')).toBeVisible()
-  await page
-    .getByRole('row', { name: /星河科技 后端开发工程师/ })
-    .click()
+  await page.getByText('2099/08/05 14:00').click()
   await page.getByRole('tab', { name: /时间线/ }).click()
   await expect(page.getByText('已投递 → 面试')).toBeVisible()
 })
@@ -144,11 +142,35 @@ test('E2E-07A 无邮件通知时可由用户手动记录面试结果', async ({ 
 
   await expect(page.getByText('面试结果已更新为“已通过”')).toBeVisible()
   await expect(row.getByRole('button', { name: '已通过' })).toBeVisible()
+  await expect(page.getByText('一面已通过，下一阶段待确认')).toBeVisible()
   await page.goto('/calendar')
   await page.getByText('星河科技一面', { exact: true }).click()
   await expect(
     page.getByRole('dialog', { name: '星河科技一面' }).getByText('已完成', { exact: true }),
   ).toBeVisible()
+})
+
+test('E2E-07B 每轮面试通过后可递增登记下一轮，未登记时保持待确认', async ({ page }) => {
+  const state = await installMockApi(page)
+  state.applications[0].interview_result = 'PASSED'
+  state.tasks[0].status = 'COMPLETED'
+  await page.goto('/applications')
+
+  await expect(page.getByText('下一阶段：待确认')).toBeVisible()
+  const row = page.getByRole('row', { name: /星河科技 后端开发工程师/ })
+  await row.getByRole('cell').first().click()
+  await page.getByRole('button', { name: '登记下一轮面试' }).click()
+  const dialog = page.getByRole('dialog', { name: '登记二面' })
+  const startAt = dialog.getByRole('combobox', { name: /开始时间/ })
+  await startAt.fill('2099-08-12 15:00:00')
+  await startAt.press('Tab')
+  await dialog.getByPlaceholder(/招聘人员电话通知/).fill('招聘人员电话通知二面')
+  await dialog.getByRole('button', { name: '保存下一轮日程' }).click()
+
+  await expect(page.getByText('二面已登记')).toBeVisible()
+  await expect(page.getByText('二面', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '待确认' }).first()).toBeVisible()
+  expect(state.tasks.at(-1)?.interview_round).toBe(2)
 })
 
 test('E2E-08 模糊时间与多岗位冲突保持待确认', async ({ page }) => {
@@ -222,7 +244,7 @@ test('E2E-11A 从面试日程放弃申请会同步取消日程并撤回申请', 
 })
 
 test('E2E-12 空列表、接口失败和窄屏布局状态可理解', async ({ page }) => {
-  await installMockApi(page, { empty: true, failPath: '/review-tasks' })
+  await installMockApi(page, { empty: true, failPath: '/review-tasks/query' })
   await page.setViewportSize({ width: 640, height: 720 })
   await page.goto('/reviews')
   await expect(page.getByText('验收故障注入：后端服务暂时不可用')).toBeVisible()

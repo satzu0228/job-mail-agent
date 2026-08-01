@@ -8,6 +8,7 @@ export type ApplicationStage =
   | 'WITHDRAWN'
 export type ApplicationStatus = 'ACTIVE' | 'CLOSED' | 'WITHDRAWN'
 export type InterviewResult = 'PENDING' | 'PASSED' | 'FAILED'
+export type OfferResult = 'PENDING' | 'ACCEPTED' | 'DECLINED'
 export type ApplicationSource = 'MANUAL' | 'EMAIL'
 export type EmailCategory =
   | 'INTERVIEW'
@@ -164,6 +165,7 @@ export interface JobApplication {
   location: string | null
   current_stage: ApplicationStage
   interview_result: InterviewResult | null
+  offer_result: OfferResult | null
   status: ApplicationStatus
   source: ApplicationSource
   applied_at: string | null
@@ -195,6 +197,36 @@ export interface JobApplicationStageTransition {
 export interface JobApplicationInterviewResultUpdate {
   version: number
   result: InterviewResult
+  reason: string
+}
+
+export interface JobApplicationNextInterviewCreate {
+  version: number
+  title: string
+  description?: string | null
+  raw_time_text?: string | null
+  start_at: string
+  deadline_at?: string | null
+  source_timezone?: string | null
+  location?: string | null
+  meeting_url?: string | null
+  reason: string
+}
+
+export interface JobApplicationNextInterviewResponse {
+  application: JobApplication
+  task: Task
+}
+
+export interface JobApplicationOfferResultUpdate {
+  version: number
+  result: OfferResult
+  reason: string
+}
+
+export interface JobApplicationReopen {
+  version: number
+  target_stage: Exclude<ApplicationStage, 'REJECTED' | 'WITHDRAWN'>
   reason: string
 }
 
@@ -240,6 +272,53 @@ export interface Task {
   version: number
   created_at: string
   updated_at: string
+}
+
+export interface TaskCreate {
+  application_id?: number | null
+  source_email_id?: number | null
+  task_type: TaskType
+  interview_round?: number | null
+  title: string
+  description?: string | null
+  raw_time_text?: string | null
+  start_at?: string | null
+  deadline_at?: string | null
+  source_timezone?: string | null
+  location?: string | null
+  meeting_url?: string | null
+  status?: TaskStatus
+}
+
+export interface AutomationRule {
+  id: number
+  user_id: number
+  account_id: number | null
+  name: string
+  rule_type: 'LOW_PRIORITY_ARCHIVE'
+  conditions: Record<string, unknown>
+  action_config: Record<string, unknown>
+  requires_confirmation: boolean
+  is_enabled: boolean
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AutomationRuleCreate {
+  account_id?: number | null
+  name: string
+  rule_type?: 'LOW_PRIORITY_ARCHIVE'
+  conditions?: Record<string, unknown>
+  action_config?: Record<string, unknown>
+  requires_confirmation?: boolean
+  is_enabled?: boolean
+}
+
+export interface AutomationRuleExecuteResponse {
+  created_review_task_ids: string[]
+  skipped_email_ids: number[]
+  failed_email_ids: Record<number, string>
 }
 
 export interface InterviewTaskWithdrawApplication {

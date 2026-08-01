@@ -3,7 +3,7 @@ import { CircleCheck, CircleClose, Connection, Plus, Refresh } from '@element-pl
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
-import { emailAccountApi } from '@/api'
+import { automationRuleApi, emailAccountApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import { formatDateTime } from '@/utils/format'
 import { syncStatusLabels } from '@/utils/dictionaries'
@@ -17,10 +17,14 @@ import type {
   EmailAccount,
   EmailAccountCreate,
   EmailConnectionTestResult,
+  AutomationRule,
 } from '@/types/api'
 
 const accounts = ref<EmailAccount[]>([])
+const automationRules = ref<AutomationRule[]>([])
 const loading = ref(false)
+const ruleLoading = ref(false)
+const ruleExecutingId = ref<number | null>(null)
 const createVisible = ref(false)
 const creating = ref(false)
 const testingId = ref<number | null>(null)
@@ -90,6 +94,79 @@ async function loadAccounts() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function loadAutomationRules() {
+  ruleLoading.value = true
+  try {
+    automationRules.value = await automationRuleApi.list()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    ruleLoading.value = false
+  }
+}
+
+async function createDefaultArchiveRule() {
+  ruleLoading.value = true
+  try {
+    await automationRuleApi.create({
+      name: '低优先级邮件归档',
+      conditions: {
+        categories: ['NON_JOB', 'JOB_RELATED_OTHER'],
+        priorities: ['LOW'],
+        min_confidence: 0.75,
+        unlinked_only: true,
+      },
+      action_config: { mode: 'PROPOSE_ONLY', target: 'JobMailArchive' },
+      requires_confirmation: true,
+      is_enabled: false,
+    })
+    ElMessage.success('自动归档规则已创建')
+    await loadAutomationRules()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    ruleLoading.value = false
+  }
+}
+
+async function setRuleEnabled(rule: AutomationRule, enabled: boolean) {
+  ruleLoading.value = true
+  try {
+    await automationRuleApi.update(rule.id, {
+      version: rule.version,
+      is_enabled: enabled,
+    })
+    ElMessage.success(enabled ? '自动归档规则已启用' : '自动归档规则已停用')
+    await loadAutomationRules()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+    await loadAutomationRules()
+  } finally {
+    ruleLoading.value = false
+  }
+}
+
+async function previewRule(rule: AutomationRule) {
+  try {
+    const result = await automationRuleApi.preview(rule.id)
+    ElMessage.info(`当前规则可匹配 ${result.total} 封邮件`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+async function executeRule(rule: AutomationRule) {
+  ruleExecutingId.value = rule.id
+  try {
+    const result = await automationRuleApi.execute(rule.id)
+    ElMessage.success(`已生成 ${result.created_review_task_ids.length} 个归档审核任务`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    ruleExecutingId.value = null
   }
 }
 
@@ -179,7 +256,10 @@ async function setSyncInterval(account: EmailAccount, interval: number) {
   }
 }
 
-onMounted(loadAccounts)
+onMounted(() => {
+  void loadAccounts()
+  void loadAutomationRules()
+})
 </script>
 
 <template>
@@ -283,6 +363,51 @@ onMounted(loadAccounts)
         <p>添加 163、126、QQ、Gmail 或自定义邮箱，授权码从后端环境变量读取。</p>
         <ElButton type="primary" @click="openCreateDialog">添加邮箱</ElButton>
       </div>
+    </section>
+
+    <section v-loading="ruleLoading" class="surface automation-panel">
+      <div class="automation-head">
+        <div>
+          <h3>自动归档规则</h3>
+          <p>规则只会生成归档审核任务，真正移动邮件仍需在审核中心确认。</p>
+        </div>
+        <ElButton
+          v-if="automationRules.length === 0"
+          type="primary"
+          plain
+          @click="createDefaultArchiveRule"
+        >
+          创建默认规则
+        </ElButton>
+      </div>
+      <div v-if="automationRules.length" class="automation-list">
+        <div v-for="rule in automationRules" :key="rule.id" class="automation-row">
+          <div>
+            <strong>{{ rule.name }}</strong>
+            <span>
+              低优先级、无需回复、未关联申请的邮件 · 置信度
+              {{ Math.round(Number(rule.conditions.min_confidence ?? 0.75) * 100) }}%
+            </span>
+          </div>
+          <ElSwitch
+            :model-value="rule.is_enabled"
+            @change="setRuleEnabled(rule, Boolean($event))"
+          />
+          <ElButton @click="previewRule(rule)">预览</ElButton>
+          <ElButton
+            type="primary"
+            plain
+            :disabled="!rule.is_enabled"
+            :loading="ruleExecutingId === rule.id"
+            @click="executeRule(rule)"
+          >
+            执行
+          </ElButton>
+        </div>
+      </div>
+      <p v-else class="automation-empty">
+        暂未配置自动归档规则。
+      </p>
     </section>
 
     <aside class="security-note">
@@ -573,6 +698,65 @@ onMounted(loadAccounts)
   margin: 0 auto 18px;
   color: var(--jm-text-secondary);
   font-size: 12px;
+}
+
+.automation-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 18px 20px;
+}
+
+.automation-head,
+.automation-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.automation-head h3 {
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.automation-head p,
+.automation-empty {
+  margin: 0;
+  color: var(--jm-text-secondary);
+  font-size: 12px;
+}
+
+.automation-list {
+  display: grid;
+  border: 1px solid var(--jm-border-light);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.automation-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--jm-border-light);
+}
+
+.automation-row:last-child {
+  border-bottom: 0;
+}
+
+.automation-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.automation-row strong {
+  font-size: 13px;
+}
+
+.automation-row span {
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
 }
 
 .security-note {

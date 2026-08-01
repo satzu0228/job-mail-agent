@@ -22,6 +22,7 @@ from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
     ArchiveStatus,
+    AutomationRuleType,
     DecisionSource,
     EmailAnalysisStatus,
     EmailCategory,
@@ -31,6 +32,7 @@ from app.domain.enums import (
     ExecutionStatus,
     ExecutorType,
     InterviewResult,
+    OfferResult,
     ReminderStatus,
     ReplyDraftStatus,
     ReviewActionType,
@@ -266,6 +268,68 @@ class JobApplicationInterviewResultUpdate(ApiSchema):
         return normalized
 
 
+class JobApplicationNextInterviewCreate(ApiSchema):
+    version: int = Field(gt=0)
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    raw_time_text: str | None = Field(default=None, max_length=500)
+    start_at: AwareDatetime
+    deadline_at: AwareDatetime | None = None
+    source_timezone: str | None = Field(default=None, max_length=64)
+    location: str | None = Field(default=None, max_length=500)
+    meeting_url: str | None = Field(default=None, max_length=2048)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("title", "reason")
+    @classmethod
+    def strip_next_interview_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("下一轮面试标题和来源说明不能为空")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_next_interview_time(self) -> "JobApplicationNextInterviewCreate":
+        if self.deadline_at is not None and self.deadline_at < self.start_at:
+            raise ValueError("下一轮面试结束时间不能早于开始时间")
+        return self
+
+
+class JobApplicationOfferResultUpdate(ApiSchema):
+    version: int = Field(gt=0)
+    result: OfferResult
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_offer_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("offer result reason cannot be empty")
+        return normalized
+
+
+class JobApplicationReopen(ApiSchema):
+    version: int = Field(gt=0)
+    target_stage: ApplicationStage
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("target_stage")
+    @classmethod
+    def reject_terminal_target(cls, value: ApplicationStage) -> ApplicationStage:
+        if value in {ApplicationStage.REJECTED, ApplicationStage.WITHDRAWN}:
+            raise ValueError("reopen target must be a non-terminal stage")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reopen_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reopen reason cannot be empty")
+        return normalized
+
+
 class JobApplicationRead(UtcResponseSchema):
     id: int
     user_id: int
@@ -275,6 +339,7 @@ class JobApplicationRead(UtcResponseSchema):
     location: str | None
     current_stage: ApplicationStage
     interview_result: InterviewResult | None
+    offer_result: OfferResult | None
     status: ApplicationStatus
     source: ApplicationSource
     applied_at: datetime | None
@@ -414,6 +479,7 @@ class TaskCreate(ApiSchema):
     source_timezone: str | None = Field(default=None, max_length=64)
     location: str | None = Field(default=None, max_length=500)
     meeting_url: str | None = Field(default=None, max_length=2048)
+    status: TaskStatus = TaskStatus.PENDING
 
     @model_validator(mode="after")
     def require_schedule_time(self) -> "TaskCreate":
@@ -474,11 +540,80 @@ class TaskRead(UtcResponseSchema):
     updated_at: datetime
 
 
+class JobApplicationNextInterviewResponse(ApiSchema):
+    application: JobApplicationRead
+    task: TaskRead
+
+
 class TaskPage(ApiSchema):
     items: list[TaskRead]
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1)
+
+
+class AutomationRuleCreate(ApiSchema):
+    account_id: int | None = Field(default=None, gt=0)
+    name: str = Field(min_length=1, max_length=100)
+    rule_type: AutomationRuleType = AutomationRuleType.LOW_PRIORITY_ARCHIVE
+    conditions: dict[str, Any] = Field(default_factory=dict)
+    action_config: dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = True
+    is_enabled: bool = False
+
+
+class AutomationRuleUpdate(ApiSchema):
+    version: int = Field(gt=0)
+    account_id: int | None = Field(default=None, gt=0)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    conditions: dict[str, Any] | None = None
+    action_config: dict[str, Any] | None = None
+    requires_confirmation: bool | None = None
+    is_enabled: bool | None = None
+
+
+class AutomationRuleRead(UtcResponseSchema):
+    id: int
+    user_id: int
+    account_id: int | None
+    name: str
+    rule_type: AutomationRuleType
+    conditions: dict[str, Any]
+    action_config: dict[str, Any]
+    requires_confirmation: bool
+    is_enabled: bool
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AutomationRuleRunRead(UtcResponseSchema):
+    id: int
+    rule_id: int
+    rule_version: int
+    user_id: int
+    email_id: int
+    analysis_id: int | None
+    analysis_version: int | None
+    matched: bool
+    status: str
+    match_reason: dict[str, Any]
+    review_task_id: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AutomationRulePreview(ApiSchema):
+    rule: AutomationRuleRead
+    candidates: list[EmailListItem]
+    total: int = Field(ge=0)
+
+
+class AutomationRuleExecuteResponse(ApiSchema):
+    created_review_task_ids: list[str] = Field(default_factory=list)
+    skipped_email_ids: list[int] = Field(default_factory=list)
+    failed_email_ids: dict[int, str] = Field(default_factory=dict)
 
 
 class ReminderRead(UtcResponseSchema):

@@ -7,8 +7,10 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.application.automation_rules import AutomationRuleService
 from app.application.email_access import EmailAccessService, EmailSyncError
 from app.application.reminders import ReminderService
+from app.infrastructure.db.models import AutomationRule
 from app.infrastructure.db.models.email_account import EmailAccount
 
 
@@ -21,6 +23,8 @@ class AutomationCycleResult:
     failed_accounts: dict[int, str] = field(default_factory=dict)
     failed_workflows: dict[int, str] = field(default_factory=dict)
     reminder_ids: list[int] = field(default_factory=list)
+    archive_review_task_ids: list[str] = field(default_factory=list)
+    failed_rules: dict[int, str] = field(default_factory=dict)
 
 
 class AutomationService:
@@ -69,6 +73,8 @@ class AutomationService:
                     # 单封模型失败不阻塞同批其他新邮件，错误详情由工作流自身留痕。
                     failed_workflows[email_id] = str(exc)[:500]
 
+        archive_review_task_ids, failed_rules = self._run_enabled_archive_rules()
+
         return AutomationCycleResult(
             claimed_account_ids=account_ids,
             synced_account_ids=synced,
@@ -77,6 +83,8 @@ class AutomationService:
             failed_accounts=failed_accounts,
             failed_workflows=failed_workflows,
             reminder_ids=reminder_ids,
+            archive_review_task_ids=archive_review_task_ids,
+            failed_rules=failed_rules,
         )
 
     def _claim_due_accounts(self, now: datetime) -> list[int]:
@@ -123,6 +131,27 @@ class AutomationService:
                 lead_minutes=self._reminder_lead_minutes,
             )
             return [item.id for item in reminders]
+
+    def _run_enabled_archive_rules(self) -> tuple[list[str], dict[int, str]]:
+        created: list[str] = []
+        failed: dict[int, str] = {}
+        with self._session_factory() as session:
+            rule_ids = list(
+                session.scalars(
+                    select(AutomationRule.id).where(
+                        AutomationRule.user_id == self._user_id,
+                        AutomationRule.is_enabled.is_(True),
+                    )
+                )
+            )
+        for rule_id in rule_ids:
+            try:
+                with self._session_factory() as session:
+                    result = AutomationRuleService(session, self._user_id).execute(rule_id)
+                created.extend(result.created_review_task_ids)
+            except Exception as exc:
+                failed[rule_id] = str(exc)[:500]
+        return created, failed
 
 
 def _utc_now() -> datetime:

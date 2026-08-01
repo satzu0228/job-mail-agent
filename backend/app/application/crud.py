@@ -8,6 +8,9 @@ from app.application.schemas import (
     InterviewTaskWithdrawApplication,
     JobApplicationCreate,
     JobApplicationInterviewResultUpdate,
+    JobApplicationNextInterviewCreate,
+    JobApplicationOfferResultUpdate,
+    JobApplicationReopen,
     JobApplicationStageTransition,
     JobApplicationUpdate,
     ReplyDraftCreate,
@@ -22,6 +25,7 @@ from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
     InterviewResult,
+    OfferResult,
     ReplyDraftStatus,
     TaskStatus,
     TaskType,
@@ -98,8 +102,12 @@ class BusinessCrudService:
                 application.status = ApplicationStatus.CLOSED
             elif data.proposed_stage is ApplicationStage.WITHDRAWN:
                 application.status = ApplicationStatus.WITHDRAWN
+            elif data.proposed_stage is ApplicationStage.OFFER:
+                application.status = ApplicationStatus.ACTIVE
+                application.offer_result = OfferResult.PENDING
             else:
                 application.status = ApplicationStatus.ACTIVE
+                application.offer_result = None
             if previous is ApplicationStage.INTERVIEW:
                 settle_interview_tasks(
                     self._session,
@@ -175,6 +183,145 @@ class BusinessCrudService:
                         ),
                         "interview_result": data.result.value,
                         "interview_round": interview_round,
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application
+
+    def schedule_next_interview(
+        self,
+        application_id: int,
+        data: JobApplicationNextInterviewCreate,
+    ) -> tuple[JobApplication, Task]:
+        """在同一事务中登记下一轮面试，并将新一轮结果恢复为待确认。"""
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+            if application.current_stage is not ApplicationStage.INTERVIEW:
+                raise ResourceConflictError("只有面试阶段的申请可以登记下一轮面试")
+            if application.status is not ApplicationStatus.ACTIVE:
+                raise ResourceConflictError("已结束的申请不能登记下一轮面试")
+            if application.interview_result is not InterviewResult.PASSED:
+                raise ResourceConflictError("确认本轮面试已通过后才能登记下一轮")
+
+            current_round = self._session.scalar(
+                select(func.max(Task.interview_round)).where(
+                    Task.application_id == application.id,
+                    Task.task_type == TaskType.INTERVIEW,
+                )
+            )
+            next_round = int(current_round or 0) + 1
+            application.interview_result = InterviewResult.PENDING
+            task_values = data.model_dump(exclude={"version", "reason"})
+            task = self.tasks.add(
+                Task(
+                    user_id=self._user_id,
+                    application_id=application.id,
+                    source_email_id=None,
+                    task_type=TaskType.INTERVIEW,
+                    interview_round=next_round,
+                    status=TaskStatus.CONFIRMED,
+                    **self._db_values(task_values),
+                )
+            )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="NEXT_INTERVIEW_SCHEDULED",
+                    previous_stage=ApplicationStage.INTERVIEW,
+                    proposed_stage=ApplicationStage.INTERVIEW,
+                    confirmed_stage=ApplicationStage.INTERVIEW,
+                    raw_time_text=data.raw_time_text,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    source_timezone=data.source_timezone,
+                    details={
+                        "decision_source": "USER",
+                        "previous_result": InterviewResult.PASSED.value,
+                        "interview_result": InterviewResult.PENDING.value,
+                        "interview_round": next_round,
+                        "task_id": task.id,
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application, task
+
+    def update_offer_result(
+        self,
+        application_id: int,
+        data: JobApplicationOfferResultUpdate,
+    ) -> JobApplication:
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+            if application.current_stage is not ApplicationStage.OFFER:
+                raise ResourceConflictError("only offer-stage applications can record offer result")
+
+            previous_result = application.offer_result
+            application.offer_result = data.result
+            application.status = (
+                ApplicationStatus.ACTIVE
+                if data.result is OfferResult.PENDING
+                else ApplicationStatus.CLOSED
+            )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="OFFER_RESULT_CHANGED",
+                    previous_stage=application.current_stage,
+                    proposed_stage=application.current_stage,
+                    confirmed_stage=application.current_stage,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    details={
+                        "decision_source": "USER",
+                        "previous_result": (
+                            previous_result.value if previous_result else None
+                        ),
+                        "offer_result": data.result.value,
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application
+
+    def reopen_application(
+        self,
+        application_id: int,
+        data: JobApplicationReopen,
+    ) -> JobApplication:
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+            if application.status is ApplicationStatus.ACTIVE:
+                raise ResourceConflictError("only inactive applications can be reopened")
+            if data.target_stage in {ApplicationStage.REJECTED, ApplicationStage.WITHDRAWN}:
+                raise ResourceConflictError("reopen target must be a non-terminal stage")
+
+            previous = application.current_stage
+            application.current_stage = data.target_stage
+            application.status = ApplicationStatus.ACTIVE
+            application.interview_result = (
+                InterviewResult.PENDING
+                if data.target_stage is ApplicationStage.INTERVIEW
+                else None
+            )
+            application.offer_result = (
+                OfferResult.PENDING if data.target_stage is ApplicationStage.OFFER else None
+            )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="APPLICATION_REOPENED",
+                    previous_stage=previous,
+                    proposed_stage=data.target_stage,
+                    confirmed_stage=data.target_stage,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    details={
+                        "decision_source": "USER",
                         "reason": data.reason,
                     },
                 )

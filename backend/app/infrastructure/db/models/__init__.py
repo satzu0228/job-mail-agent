@@ -3,6 +3,7 @@
 from app.infrastructure.db.models.action_execution import ActionExecution
 from app.infrastructure.db.models.application_event import ApplicationEvent
 from app.infrastructure.db.models.automation_rule import AutomationRule
+from app.infrastructure.db.models.automation_rule_run import AutomationRuleRun
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
@@ -18,6 +19,7 @@ __all__ = [
     "ActionExecution",
     "ApplicationEvent",
     "AutomationRule",
+    "AutomationRuleRun",
     "Email",
     "EmailAccount",
     "EmailAnalysis",

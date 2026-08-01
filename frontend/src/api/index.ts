@@ -1,6 +1,9 @@
 import { http } from './http'
 import type {
   ApplicationEvent,
+  AutomationRule,
+  AutomationRuleCreate,
+  AutomationRuleExecuteResponse,
   EmailAccount,
   EmailAccountCreate,
   EmailConnectionTestResult,
@@ -10,6 +13,10 @@ import type {
   JobApplication,
   JobApplicationCreate,
   JobApplicationInterviewResultUpdate,
+  JobApplicationNextInterviewCreate,
+  JobApplicationNextInterviewResponse,
+  JobApplicationOfferResultUpdate,
+  JobApplicationReopen,
   JobApplicationStageTransition,
   InterviewTaskWithdrawApplication,
   Page,
@@ -17,8 +24,23 @@ import type {
   Reminder,
   ReviewTask,
   Task,
+  TaskCreate,
   WorkflowRun,
 } from '@/types/api'
+
+async function collectAll<T>(
+  fetchPage: (offset: number, limit: number) => Promise<Page<T>>,
+  limit = 100,
+): Promise<T[]> {
+  const items: T[] = []
+  let offset = 0
+  for (;;) {
+    const page = await fetchPage(offset, limit)
+    items.push(...page.items)
+    offset += page.items.length
+    if (page.items.length === 0 || offset >= page.total) return items
+  }
+}
 
 export const emailAccountApi = {
   list: () => http.get<EmailAccount[]>('/email-accounts').then(({ data }) => data),
@@ -47,7 +69,11 @@ export const emailAccountApi = {
 
 export const emailApi = {
   list: (limit = 100) =>
-    http.get<EmailListItem[]>('/emails', { params: { limit } }).then(({ data }) => data),
+    collectAll<EmailListItem>((offset, pageLimit) =>
+      http
+        .get<Page<EmailListItem>>('/emails/query', { params: { offset, limit: pageLimit } })
+        .then(({ data }) => data),
+    limit),
   query: (params: {
     offset?: number
     limit?: number
@@ -74,11 +100,23 @@ export const emailApi = {
 
 export const applicationApi = {
   list: (limit = 100) =>
-    http
-      .get<JobApplication[]>('/job-applications', { params: { limit } })
-      .then(({ data }) => data),
+    collectAll<JobApplication>((offset, pageLimit) =>
+      http
+        .get<Page<JobApplication>>('/job-applications/query', { params: { offset, limit: pageLimit } })
+        .then(({ data }) => data),
+    limit),
   create: (payload: JobApplicationCreate) =>
     http.post<JobApplication>('/job-applications', payload).then(({ data }) => data),
+  query: (params: {
+    offset?: number
+    limit?: number
+    keyword?: string
+    stage?: string
+    status?: string
+  }) =>
+    http
+      .get<Page<JobApplication>>('/job-applications/query', { params })
+      .then(({ data }) => data),
   update: (id: number, payload: Partial<JobApplication> & { version: number }) =>
     http.patch<JobApplication>(`/job-applications/${id}`, payload).then(({ data }) => data),
   transitionStage: (id: number, payload: JobApplicationStageTransition) =>
@@ -88,6 +126,21 @@ export const applicationApi = {
   updateInterviewResult: (id: number, payload: JobApplicationInterviewResultUpdate) =>
     http
       .post<JobApplication>(`/job-applications/${id}/interview-result`, payload)
+      .then(({ data }) => data),
+  scheduleNextInterview: (id: number, payload: JobApplicationNextInterviewCreate) =>
+    http
+      .post<JobApplicationNextInterviewResponse>(
+        `/job-applications/${id}/next-interview`,
+        payload,
+      )
+      .then(({ data }) => data),
+  updateOfferResult: (id: number, payload: JobApplicationOfferResultUpdate) =>
+    http
+      .post<JobApplication>(`/job-applications/${id}/offer-result`, payload)
+      .then(({ data }) => data),
+  reopen: (id: number, payload: JobApplicationReopen) =>
+    http
+      .post<JobApplication>(`/job-applications/${id}/reopen`, payload)
       .then(({ data }) => data),
   events: (id: number, offset = 0, limit = 100) =>
     http
@@ -99,7 +152,22 @@ export const applicationApi = {
 
 export const taskApi = {
   list: (limit = 100) =>
-    http.get<Task[]>('/tasks', { params: { limit } }).then(({ data }) => data),
+    collectAll<Task>((offset, pageLimit) =>
+      http
+        .get<Page<Task>>('/tasks/query', { params: { offset, limit: pageLimit } })
+        .then(({ data }) => data),
+    limit),
+  query: (params: {
+    offset?: number
+    limit?: number
+    application_id?: number
+    status?: string
+    task_type?: string
+    start_from?: string
+    start_to?: string
+  }) => http.get<Page<Task>>('/tasks/query', { params }).then(({ data }) => data),
+  create: (payload: TaskCreate) =>
+    http.post<Task>('/tasks', payload).then(({ data }) => data),
   update: (id: number, payload: Partial<Task> & { version: number }) =>
     http.patch<Task>(`/tasks/${id}`, payload).then(({ data }) => data),
   withdrawApplication: (id: number, payload: InterviewTaskWithdrawApplication) =>
@@ -121,7 +189,17 @@ export const reminderApi = {
 
 export const reviewApi = {
   list: (limit = 100) =>
-    http.get<ReviewTask[]>('/review-tasks', { params: { limit } }).then(({ data }) => data),
+    collectAll<ReviewTask>((offset, pageLimit) =>
+      http
+        .get<Page<ReviewTask>>('/review-tasks/query', { params: { offset, limit: pageLimit } })
+        .then(({ data }) => data),
+    limit),
+  query: (params: {
+    offset?: number
+    limit?: number
+    status?: string
+    action_type?: string
+  }) => http.get<Page<ReviewTask>>('/review-tasks/query', { params }).then(({ data }) => data),
   detail: (id: string) =>
     http.get<ReviewTask>(`/review-tasks/${id}`).then(({ data }) => data),
   decide: (
@@ -135,5 +213,24 @@ export const reviewApi = {
   ) =>
     http
       .post<ReviewDecisionResponse>(`/review-tasks/${id}/decision`, payload)
+      .then(({ data }) => data),
+}
+
+export const automationRuleApi = {
+  list: () => http.get<AutomationRule[]>('/automation-rules').then(({ data }) => data),
+  create: (payload: AutomationRuleCreate) =>
+    http.post<AutomationRule>('/automation-rules', payload).then(({ data }) => data),
+  update: (id: number, payload: Partial<AutomationRule> & { version: number }) =>
+    http.patch<AutomationRule>(`/automation-rules/${id}`, payload).then(({ data }) => data),
+  preview: (id: number, limit = 20) =>
+    http
+      .get<{ rule: AutomationRule; candidates: EmailListItem[]; total: number }>(
+        `/automation-rules/${id}/preview`,
+        { params: { limit } },
+      )
+      .then(({ data }) => data),
+  execute: (id: number) =>
+    http
+      .post<AutomationRuleExecuteResponse>(`/automation-rules/${id}/execute`)
       .then(({ data }) => data),
 }

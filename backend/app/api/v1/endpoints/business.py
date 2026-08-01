@@ -1,9 +1,11 @@
+from datetime import datetime
 from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.application.automation_rules import AutomationRuleService
 from app.application.crud import BusinessCrudService
 from app.application.email_access import (
     EmailAccessService,
@@ -13,6 +15,11 @@ from app.application.reminders import ReminderService
 from app.application.schemas import (
     ApplicationEventPage,
     ApplicationEventRead,
+    AutomationRuleCreate,
+    AutomationRuleExecuteResponse,
+    AutomationRulePreview,
+    AutomationRuleRead,
+    AutomationRuleUpdate,
     EmailAccountActiveUpdate,
     EmailAccountCreate,
     EmailAccountRead,
@@ -26,8 +33,12 @@ from app.application.schemas import (
     InterviewTaskWithdrawApplication,
     JobApplicationCreate,
     JobApplicationInterviewResultUpdate,
+    JobApplicationNextInterviewCreate,
+    JobApplicationNextInterviewResponse,
+    JobApplicationOfferResultUpdate,
     JobApplicationPage,
     JobApplicationRead,
+    JobApplicationReopen,
     JobApplicationStageTransition,
     JobApplicationUpdate,
     ReminderRead,
@@ -44,8 +55,11 @@ from app.core.config import Settings, get_settings
 from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
+    ArchiveStatus,
     EmailCategory,
+    EmailDirection,
     TaskStatus,
+    TaskType,
 )
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.session import get_db_session
@@ -64,6 +78,19 @@ def service(session: SessionDependency, settings: SettingsDependency) -> Busines
 
 
 ServiceDependency = Annotated[BusinessCrudService, Depends(service)]
+
+
+def automation_rule_service(
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> AutomationRuleService:
+    return AutomationRuleService(session, settings.demo_user_id)
+
+
+AutomationRuleDependency = Annotated[
+    AutomationRuleService,
+    Depends(automation_rule_service),
+]
 
 
 def email_access_service(
@@ -214,6 +241,8 @@ def query_emails(
     application_id: int | None = Query(default=None, gt=0),
     linked: bool | None = None,
     category: EmailCategory | None = None,
+    direction: EmailDirection | None = None,
+    archive_status: ArchiveStatus | None = None,
 ) -> EmailPage:
     items, total = use_case.emails.query(
         offset=offset,
@@ -223,6 +252,8 @@ def query_emails(
         application_id=application_id,
         linked=linked,
         category=category,
+        direction=direction,
+        archive_status=archive_status,
     )
     return EmailPage(
         items=[EmailListItem.model_validate(item) for item in items],
@@ -420,6 +451,53 @@ def update_application_interview_result(
     )
 
 
+@router.post(
+    "/job-applications/{application_id}/next-interview",
+    response_model=JobApplicationNextInterviewResponse,
+    tags=["job-applications"],
+)
+def schedule_application_next_interview(
+    application_id: int,
+    payload: JobApplicationNextInterviewCreate,
+    use_case: ServiceDependency,
+) -> JobApplicationNextInterviewResponse:
+    application, task = use_case.schedule_next_interview(application_id, payload)
+    return JobApplicationNextInterviewResponse(
+        application=JobApplicationRead.model_validate(application),
+        task=TaskRead.model_validate(task),
+    )
+
+
+@router.post(
+    "/job-applications/{application_id}/offer-result",
+    response_model=JobApplicationRead,
+    tags=["job-applications"],
+)
+def update_application_offer_result(
+    application_id: int,
+    payload: JobApplicationOfferResultUpdate,
+    use_case: ServiceDependency,
+) -> JobApplicationRead:
+    return JobApplicationRead.model_validate(
+        use_case.update_offer_result(application_id, payload)
+    )
+
+
+@router.post(
+    "/job-applications/{application_id}/reopen",
+    response_model=JobApplicationRead,
+    tags=["job-applications"],
+)
+def reopen_application(
+    application_id: int,
+    payload: JobApplicationReopen,
+    use_case: ServiceDependency,
+) -> JobApplicationRead:
+    return JobApplicationRead.model_validate(
+        use_case.reopen_application(application_id, payload)
+    )
+
+
 @router.get("/tasks", response_model=list[TaskRead], tags=["tasks"])
 def list_tasks(
     use_case: ServiceDependency,
@@ -439,12 +517,18 @@ def query_tasks(
     limit: PageLimit = 50,
     application_id: int | None = Query(default=None, gt=0),
     task_status: TaskStatusFilter = None,
+    task_type: TaskType | None = None,
+    start_from: Annotated[datetime | None, Query()] = None,
+    start_to: Annotated[datetime | None, Query()] = None,
 ) -> TaskPage:
     items, total = use_case.tasks.query(
         offset=offset,
         limit=limit,
         application_id=application_id,
         status=task_status,
+        task_type=task_type,
+        start_from=start_from,
+        start_to=start_to,
     )
     return TaskPage(
         items=[TaskRead.model_validate(item) for item in items],
@@ -525,6 +609,74 @@ def update_reminder_read(
         read=payload.read,
     )
     return ReminderRead.model_validate(reminder)
+
+
+@router.get(
+    "/automation-rules",
+    response_model=list[AutomationRuleRead],
+    tags=["automation-rules"],
+)
+def list_automation_rules(
+    use_case: AutomationRuleDependency,
+) -> list[AutomationRuleRead]:
+    return [AutomationRuleRead.model_validate(item) for item in use_case.list()]
+
+
+@router.post(
+    "/automation-rules",
+    response_model=AutomationRuleRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["automation-rules"],
+)
+def create_automation_rule(
+    payload: AutomationRuleCreate,
+    use_case: AutomationRuleDependency,
+) -> AutomationRuleRead:
+    return AutomationRuleRead.model_validate(use_case.create(payload))
+
+
+@router.patch(
+    "/automation-rules/{rule_id}",
+    response_model=AutomationRuleRead,
+    tags=["automation-rules"],
+)
+def update_automation_rule(
+    rule_id: int,
+    payload: AutomationRuleUpdate,
+    use_case: AutomationRuleDependency,
+) -> AutomationRuleRead:
+    return AutomationRuleRead.model_validate(use_case.update(rule_id, payload))
+
+
+@router.get(
+    "/automation-rules/{rule_id}/preview",
+    response_model=AutomationRulePreview,
+    tags=["automation-rules"],
+)
+def preview_automation_rule(
+    rule_id: int,
+    use_case: AutomationRuleDependency,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> AutomationRulePreview:
+    rule = use_case.get(rule_id)
+    candidates, total = use_case.preview(rule_id, limit=limit)
+    return AutomationRulePreview(
+        rule=AutomationRuleRead.model_validate(rule),
+        candidates=[EmailListItem.model_validate(item) for item in candidates],
+        total=total,
+    )
+
+
+@router.post(
+    "/automation-rules/{rule_id}/execute",
+    response_model=AutomationRuleExecuteResponse,
+    tags=["automation-rules"],
+)
+def execute_automation_rule(
+    rule_id: int,
+    use_case: AutomationRuleDependency,
+) -> AutomationRuleExecuteResponse:
+    return use_case.execute(rule_id)
 
 
 @router.get(

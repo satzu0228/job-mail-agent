@@ -27,6 +27,12 @@ class InterviewResult(StrEnum):
     FAILED = "FAILED"
 
 
+class OfferResult(StrEnum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    DECLINED = "DECLINED"
+
+
 class ApplicationSource(StrEnum):
     MANUAL = "MANUAL"
     EMAIL = "EMAIL"

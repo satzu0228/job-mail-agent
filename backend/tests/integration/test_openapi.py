@@ -29,6 +29,7 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/job-applications/{application_id}/events",
         "/api/v1/job-applications/{application_id}/stage-transitions",
         "/api/v1/job-applications/{application_id}/interview-result",
+        "/api/v1/job-applications/{application_id}/next-interview",
         "/api/v1/tasks/{task_id}/withdraw-application",
         "/api/v1/review-tasks",
         "/api/v1/review-tasks/query",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.orm import Session
 
@@ -103,6 +105,8 @@ class EmailRepository:
         application_id: int | None = None,
         linked: bool | None = None,
         category: str | None = None,
+        direction: str | None = None,
+        archive_status: str | None = None,
     ) -> tuple[list[Email], int]:
         conditions = [EmailAccount.user_id == self._user_id]
         if account_id is not None:
@@ -122,6 +126,16 @@ class EmailRepository:
             conditions.append(Email.application_id.is_not(None))
         elif linked is False:
             conditions.append(Email.application_id.is_(None))
+        if archive_status:
+            conditions.append(Email.archive_status == archive_status)
+        if direction == "SENT":
+            conditions.append(
+                func.lower(Email.from_address) == func.lower(EmailAccount.email_address)
+            )
+        elif direction == "RECEIVED":
+            conditions.append(
+                func.lower(Email.from_address) != func.lower(EmailAccount.email_address)
+            )
         statement = select(Email).join(EmailAccount).where(*conditions)
         count_statement = (
             select(func.count(Email.id)).join(EmailAccount).where(*conditions)
@@ -332,12 +346,31 @@ class TaskRepository:
         limit: int,
         application_id: int | None = None,
         status: str | None = None,
+        task_type: str | None = None,
+        start_from: datetime | None = None,
+        start_to: datetime | None = None,
     ) -> tuple[list[Task], int]:
         conditions = [Task.user_id == self._user_id]
         if application_id is not None:
             conditions.append(Task.application_id == application_id)
         if status:
             conditions.append(Task.status == status)
+        if task_type:
+            conditions.append(Task.task_type == task_type)
+        if start_from is not None:
+            conditions.append(
+                or_(
+                    Task.start_at >= _db_datetime(start_from),
+                    Task.deadline_at >= _db_datetime(start_from),
+                )
+            )
+        if start_to is not None:
+            conditions.append(
+                or_(
+                    Task.start_at <= _db_datetime(start_to),
+                    Task.deadline_at <= _db_datetime(start_to),
+                )
+            )
         total = int(
             self._session.scalar(select(func.count(Task.id)).where(*conditions))
             or 0
@@ -401,3 +434,9 @@ class ReplyDraftRepository:
         self._session.add(draft)
         self._session.flush()
         return draft
+
+
+def _db_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
