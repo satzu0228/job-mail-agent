@@ -32,6 +32,7 @@ from app.application.schemas import (
     ReplyGenerationRequest,
     ReviewDecision,
     ReviewDecisionResponse,
+    ReviewTaskRead,
     WorkflowRunRead,
 )
 from app.domain.enums import EmailParseStatus, ReviewTaskStatus, WorkflowRunStatus
@@ -504,10 +505,43 @@ class JobMailWorkflowService:
             )
 
         with self._session_factory() as session:
-            return ReviewTaskService(
+            review_service = ReviewTaskService(
                 session,
                 self._user_id,
-            ).response_for_task(task_id)
+            )
+            response = review_service.response_for_task(task_id)
+            workflow = self._owned_workflow(
+                session,
+                response.review_task.workflow_run_id,
+            )
+            return self._attach_current_follow_up(
+                response,
+                workflow,
+                review_service,
+            )
+
+    @staticmethod
+    def _attach_current_follow_up(
+        response: ReviewDecisionResponse,
+        workflow: WorkflowRun,
+        review_service: ReviewTaskService,
+    ) -> ReviewDecisionResponse:
+        """返回图恢复后真正等待用户处理的下一项审核。"""
+        pending_id = workflow.pending_review_task_id
+        if (
+            response.follow_up_review_task is not None
+            or workflow.status is not WorkflowRunStatus.WAITING_REVIEW
+            or not pending_id
+            or pending_id == response.review_task.id
+        ):
+            return response
+        return response.model_copy(
+            update={
+                "follow_up_review_task": ReviewTaskRead.model_validate(
+                    review_service.get(pending_id)
+                )
+            }
+        )
 
     def _active_run_for_email(self, email_id: int) -> WorkflowRun | None:
         with self._session_factory() as session:

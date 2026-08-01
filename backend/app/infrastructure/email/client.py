@@ -4,6 +4,7 @@ import imaplib
 import re
 import smtplib
 import ssl
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -32,6 +33,10 @@ class SmtpDeliveryUnknownError(RuntimeError):
     """SMTP 会话在提交期间中断，无法确认服务端是否已接受邮件。"""
 
 
+class ImapMoveUnknownError(RuntimeError):
+    """IMAP 已接受移动命令，但未返回可验证的新 UID。"""
+
+
 @dataclass(frozen=True)
 class RemoteEmail:
     uid: int
@@ -39,6 +44,13 @@ class RemoteEmail:
     received_at: datetime | None
     truncated: bool = False
     message_size: int | None = None
+
+
+@dataclass(frozen=True)
+class ImapMoveResult:
+    folder: str
+    uid_validity: int
+    uid: int
 
 
 class ImapMailboxClient:
@@ -118,6 +130,89 @@ class ImapMailboxClient:
             raise
         except (imaplib.IMAP4.error, OSError, ValueError) as exc:
             raise EmailConnectionError("IMAP 附件读取失败") from exc
+        finally:
+            self._close(client)
+
+    def move(
+        self,
+        account: EmailAccount,
+        credential: str,
+        *,
+        source_folder: str,
+        source_uid: int,
+        target_folder: str,
+        create_target: bool,
+        on_copy: Callable[[ImapMoveResult], None] | None = None,
+    ) -> ImapMoveResult:
+        client = self._connect(account)
+        submitted = False
+        try:
+            client.login(account.email_address, credential)
+            self._identify_client(client, account)
+            capabilities = {
+                (
+                    value.decode("ascii", errors="ignore").upper()
+                    if isinstance(value, bytes)
+                    else str(value).upper()
+                )
+                for value in getattr(client, "capabilities", ())
+            }
+            supports_move = "MOVE" in capabilities
+            if not supports_move and "UIDPLUS" not in capabilities:
+                raise EmailConnectionError(
+                    "IMAP 服务器不支持 MOVE 或可检查点恢复的 UIDPLUS"
+                )
+            if create_target:
+                status, _ = client.create(target_folder)
+                if status not in {"OK", "NO"}:
+                    raise EmailConnectionError("无法创建系统归档文件夹")
+            status, _ = client.select(source_folder, readonly=False)
+            if status != "OK":
+                raise EmailConnectionError("无法以读写方式打开源文件夹")
+            submitted = True
+            command = "MOVE" if supports_move else "COPY"
+            status, _ = client.uid(command, str(source_uid), target_folder)
+            if status != "OK":
+                raise EmailConnectionError("IMAP 服务器拒绝移动邮件")
+            response_status, values = client.response("COPYUID")
+            if response_status != "COPYUID" or not values or not values[0]:
+                raise ImapMoveUnknownError("IMAP 移动结果无法确认")
+            parts = values[0].split()
+            if len(parts) < 3:
+                raise ImapMoveUnknownError("IMAP 移动结果缺少目标 UID")
+            result = ImapMoveResult(
+                folder=target_folder,
+                uid_validity=int(parts[0]),
+                uid=int(parts[2].split(b",")[-1].split(b":")[-1]),
+            )
+            if supports_move:
+                return result
+            if on_copy is None:
+                raise ImapMoveUnknownError("IMAP 复制成功，但缺少持久化检查点")
+            try:
+                on_copy(result)
+            except Exception as exc:
+                raise ImapMoveUnknownError(
+                    "IMAP 复制成功，但检查点持久化失败"
+                ) from exc
+            status, _ = client.uid(
+                "STORE",
+                str(source_uid),
+                "+FLAGS.SILENT",
+                r"(\Deleted)",
+            )
+            if status != "OK":
+                raise ImapMoveUnknownError("IMAP 复制成功，但源邮件删除结果不明确")
+            status, _ = client.uid("EXPUNGE", str(source_uid))
+            if status != "OK":
+                raise ImapMoveUnknownError("IMAP 复制成功，但源邮件清理结果不明确")
+            return result
+        except (EmailConnectionError, ImapMoveUnknownError):
+            raise
+        except (imaplib.IMAP4.error, OSError, UnicodeError, ValueError) as exc:
+            if submitted:
+                raise ImapMoveUnknownError("IMAP 移动结果无法确认") from exc
+            raise EmailConnectionError("IMAP 移动失败") from exc
         finally:
             self._close(client)
 

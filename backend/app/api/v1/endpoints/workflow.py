@@ -12,6 +12,7 @@ from app.agents.classification.agent import ClassificationAgent
 from app.agents.extraction.agent import ExtractionAgent
 from app.agents.reply import ReplyAgent
 from app.application.application_management import ReviewTaskService
+from app.application.archive import EmailArchiveService
 from app.application.schemas import (
     ReviewDecision,
     ReviewDecisionResponse,
@@ -142,11 +143,18 @@ class ReviewDecisionCoordinator:
             self._session,
             self._settings.demo_user_id,
         ).get(task_id)
+        action_type = task.action_type
         workflow = self._session.get(WorkflowRun, task.workflow_run_id)
         is_phase_seven = (
             workflow is not None and workflow.graph_version == GRAPH_VERSION
         )
         self._session.rollback()
+        if action_type.value in {"ARCHIVE_EMAIL", "RESTORE_EMAIL"}:
+            return EmailArchiveService(
+                self._session,
+                self._settings.demo_user_id,
+                timeout_seconds=self._settings.email_connect_timeout_seconds,
+            ).decide(task_id, payload)
         if not is_phase_seven:
             return ReviewTaskService(
                 self._session,

@@ -21,6 +21,12 @@ class ApplicationStatus(StrEnum):
     WITHDRAWN = "WITHDRAWN"
 
 
+class InterviewResult(StrEnum):
+    PENDING = "PENDING"
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+
+
 class ApplicationSource(StrEnum):
     MANUAL = "MANUAL"
     EMAIL = "EMAIL"

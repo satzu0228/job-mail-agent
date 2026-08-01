@@ -20,7 +20,7 @@ from app.agents.common.schemas import (
     PreparedEmail,
     ShortText,
 )
-from app.domain.enums import ApplicationStage, EmailCategory
+from app.domain.enums import ApplicationStage, EmailCategory, InterviewResult
 
 
 class ExtractionField(StrEnum):
@@ -45,6 +45,12 @@ class ExtractedText(AgentSchema):
 
 class ExtractedStage(AgentSchema):
     value: ApplicationStage
+    confidence: Confidence
+    evidence: list[Evidence] = Field(min_length=1, max_length=10)
+
+
+class ExtractedInterviewResult(AgentSchema):
+    value: InterviewResult
     confidence: Confidence
     evidence: list[Evidence] = Field(min_length=1, max_length=10)
 
@@ -152,6 +158,7 @@ class ExtractionOutput(AgentSchema):
     company: ExtractedText | None = None
     position: ExtractedText | None = None
     proposed_stage: ExtractedStage | None = None
+    interview_result: ExtractedInterviewResult | None = None
     event_type: ExtractedText | None = None
     contact_name: ExtractedText | None = None
     contact_email: ExtractedText | None = None

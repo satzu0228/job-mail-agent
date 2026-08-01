@@ -12,6 +12,7 @@ from app.application.application_management import (
     ApplicationManagementService,
     ReviewTaskService,
 )
+from app.application.archive import EmailArchiveService
 from app.application.schemas import (
     ApplicationMatchResponse,
     ReviewDecision,
@@ -50,11 +51,23 @@ def review_service(
     return ReviewTaskService(session, settings.demo_user_id)
 
 
+def archive_service(
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> EmailArchiveService:
+    return EmailArchiveService(
+        session,
+        settings.demo_user_id,
+        timeout_seconds=settings.email_connect_timeout_seconds,
+    )
+
+
 ManagementDependency = Annotated[
     ApplicationManagementService,
     Depends(management_service),
 ]
 ReviewDependency = Annotated[ReviewTaskService, Depends(review_service)]
+ArchiveDependency = Annotated[EmailArchiveService, Depends(archive_service)]
 ReviewDecisionDependency = Annotated[
     ReviewDecisionCoordinator,
     Depends(review_decision_service),
@@ -71,6 +84,30 @@ def match_application(
     use_case: ManagementDependency,
 ) -> ApplicationMatchResponse:
     return use_case.match_email(email_id)
+
+
+@router.post(
+    "/emails/{email_id}/archive-review",
+    response_model=ReviewTaskRead,
+    tags=["email-archive"],
+)
+def propose_email_archive(
+    email_id: int,
+    use_case: ArchiveDependency,
+) -> ReviewTaskRead:
+    return ReviewTaskRead.model_validate(use_case.propose_archive(email_id))
+
+
+@router.post(
+    "/emails/{email_id}/restore-review",
+    response_model=ReviewTaskRead,
+    tags=["email-archive"],
+)
+def propose_email_restore(
+    email_id: int,
+    use_case: ArchiveDependency,
+) -> ReviewTaskRead:
+    return ReviewTaskRead.model_validate(use_case.propose_restore(email_id))
 
 
 @router.get(

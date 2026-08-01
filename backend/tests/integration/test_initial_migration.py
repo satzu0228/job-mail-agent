@@ -14,10 +14,10 @@ def make_alembic_config() -> Config:
     return config
 
 
-def test_fifth_migration_is_the_only_head() -> None:
+def test_seventh_migration_is_the_only_head() -> None:
     scripts = ScriptDirectory.from_config(make_alembic_config())
 
-    assert scripts.get_current_head() == "20260730_0005"
+    assert scripts.get_current_head() == "20260801_0007"
 
 
 def test_initial_migration_generates_ordered_mysql_sql() -> None:
@@ -56,6 +56,8 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
     assert "20260730_0004" in sql
     assert "auto_sync_enabled BOOL NOT NULL DEFAULT 0" in sql
     assert "uq_reminders_task_id" in sql
+    assert "current_uid_validity BIGINT UNSIGNED" in sql
+    assert "ix_emails_current_imap_pointer" in sql
 
 
 def test_initial_migration_downgrades_in_reverse_dependency_order() -> None:

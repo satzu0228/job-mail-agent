@@ -3,6 +3,8 @@
 from app.infrastructure.email.client import (
     EmailConnectionError,
     ImapMailboxClient,
+    ImapMoveResult,
+    ImapMoveUnknownError,
     RemoteEmail,
     SmtpConnectionTester,
     SmtpDeliveryFailedError,
@@ -21,6 +23,8 @@ from app.infrastructure.email.parser import ParsedEmail, attachment_parts, parse
 __all__ = [
     "EmailConnectionError",
     "EmailFormattingError",
+    "ImapMoveResult",
+    "ImapMoveUnknownError",
     "ImapMailboxClient",
     "ParsedEmail",
     "RemoteEmail",

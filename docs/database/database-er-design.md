@@ -157,6 +157,8 @@ MVP 不实现完整账号系统，只保留一个配置好的演示用户。
 | `previous_folder` | VARCHAR(255) | 可空，用于归档撤销 |
 | `uid_validity` | BIGINT UNSIGNED |  |
 | `imap_uid` | BIGINT UNSIGNED |  |
+| `current_uid_validity` | BIGINT UNSIGNED | 可空；移动后当前文件夹的 UIDVALIDITY |
+| `current_imap_uid` | BIGINT UNSIGNED | 可空；移动后当前文件夹的 UID |
 | `message_id` | VARCHAR(998) | 可空、辅助去重 |
 | `subject` | VARCHAR(998) |  |
 | `from_name` | VARCHAR(255) | 可空 |
@@ -188,6 +190,7 @@ UNIQUE(account_id, source_folder, uid_validity, imap_uid)
 - INDEX(`message_id(191)`)；非唯一前缀索引，完整字段仍用于辅助去重
 - INDEX(`application_id`, `received_at`)
 - INDEX(`archive_status`)
+- INDEX(`account_id`, `current_folder`, `current_uid_validity`, `current_imap_uid`)
 
 说明：
 
@@ -244,6 +247,7 @@ UNIQUE(account_id, source_folder, uid_validity, imap_uid)
 | `position_name` | VARCHAR(255) |  |
 | `location` | VARCHAR(255) | 可空 |
 | `current_stage` | VARCHAR(32) | 用户确认阶段 |
+| `interview_result` | VARCHAR(16) | 可空；面试阶段本轮结果：`PENDING/PASSED/FAILED` |
 | `status` | VARCHAR(32) | `ACTIVE/CLOSED/WITHDRAWN` |
 | `source` | VARCHAR(32) | `MANUAL/EMAIL` |
 | `applied_at` | DATETIME(6) | 可空 |
@@ -264,6 +268,9 @@ OFFER
 REJECTED
 WITHDRAWN
 ```
+
+面试轮次由已确认的面试任务 `tasks.interview_round` 表示，面试结果独立保存，避免把
+“一面通过”错误建模成 Offer 或新的宏观阶段。
 
 索引：
 
@@ -448,8 +455,11 @@ RESTORE_EMAIL
 
 - UNIQUE(`review_task_id`, `attempt_no`)
 - 已 `SUCCEEDED` 的动作不得再次执行
-- SMTP `UNKNOWN` 不自动重试
-- IMAP 归档成功后更新 `emails.current_folder`、`previous_folder` 和 `archive_status`，不修改 `source_folder`
+- SMTP 和 IMAP `UNKNOWN` 均不自动重试
+- IMAP 归档成功后更新当前文件夹、当前 UID 指针、`previous_folder` 和
+  `archive_status`，不修改原始 `source_folder/uid_validity/imap_uid`
+- 服务端支持 `MOVE` 时使用原子移动；仅支持 `UIDPLUS` 时先复制并持久化
+  `COPYUID` 检查点，再标记并按 UID 清理源邮件
 
 ### 5.13 `automation_rules`
 
@@ -595,6 +605,6 @@ reminders
 - [ ] SMTP `UNKNOWN` 不会自动重试。
 - [ ] 面试和截止日期能生成 `tasks` 并在日历展示。
 - [x] 归档规则默认关闭且默认需要确认。
-- [ ] 归档成功后可以根据 `previous_folder` 提出恢复动作。
+- [x] 归档成功后可以根据 `previous_folder` 提出恢复动作。
 - [ ] Agent 轨迹可以从 `workflow_runs.agent_trace` 查询。
 - [ ] 授权码不出现在数据库、API Schema 和日志中。

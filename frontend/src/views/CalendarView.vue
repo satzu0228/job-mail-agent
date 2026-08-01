@@ -11,6 +11,7 @@ import { formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
 import type { JobApplication, Reminder, Task, TaskStatus } from '@/types/api'
 
 type ViewMode = 'list' | 'month'
+type InterviewAction = 'reschedule' | 'withdraw'
 
 const tasks = ref<Task[]>([])
 const reminders = ref<Reminder[]>([])
@@ -22,6 +23,11 @@ const selected = ref<Task | null>(null)
 const drawerVisible = ref(false)
 const updating = ref(false)
 const statusFilter = ref('')
+const actionVisible = ref(false)
+const interviewAction = ref<InterviewAction>('reschedule')
+const rescheduleAt = ref('')
+const rescheduleMeetingUrl = ref('')
+const withdrawReason = ref('')
 
 const visibleTasks = computed(() =>
   tasks.value
@@ -52,6 +58,12 @@ function applicationName(id: number | null): string {
   if (!id) return '未关联申请'
   const application = applications.value.find((item) => item.id === id)
   return application ? `${application.company_name} · ${application.position_name}` : '申请记录'
+}
+
+function applicationForTask(task: Task | null): JobApplication | undefined {
+  return task?.application_id
+    ? applications.value.find((item) => item.id === task.application_id)
+    : undefined
 }
 
 function tasksForDate(date: string): Task[] {
@@ -105,6 +117,62 @@ async function updateStatus(status: TaskStatus) {
     if (index >= 0) tasks.value[index] = updated
     selected.value = updated
     ElMessage.success('日程状态已更新')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    updating.value = false
+  }
+}
+
+function openInterviewAction(action: InterviewAction) {
+  if (!selected.value) return
+  interviewAction.value = action
+  rescheduleAt.value = taskTime(selected.value)
+    ? dayjs(taskTime(selected.value)).format('YYYY-MM-DDTHH:mm')
+    : ''
+  rescheduleMeetingUrl.value = selected.value.meeting_url ?? ''
+  withdrawReason.value = ''
+  actionVisible.value = true
+}
+
+async function confirmInterviewAction() {
+  if (!selected.value) return
+  updating.value = true
+  try {
+    if (interviewAction.value === 'reschedule') {
+      if (!rescheduleAt.value) {
+        ElMessage.warning('请选择新的面试时间')
+        return
+      }
+      const updated = await taskApi.update(selected.value.id, {
+        version: selected.value.version,
+        start_at: new Date(rescheduleAt.value).toISOString(),
+        source_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+        meeting_url: rescheduleMeetingUrl.value.trim() || null,
+        status: 'CONFIRMED',
+      })
+      selected.value = updated
+      ElMessage.success('面试时间已调整')
+    } else {
+      const application = applicationForTask(selected.value)
+      if (!application) {
+        ElMessage.error('该日程没有关联求职申请')
+        return
+      }
+      if (!withdrawReason.value.trim()) {
+        ElMessage.warning('请填写放弃申请的原因')
+        return
+      }
+      selected.value = await taskApi.withdrawApplication(selected.value.id, {
+        version: selected.value.version,
+        application_version: application.version,
+        reason: withdrawReason.value.trim(),
+      })
+      ElMessage.success('申请已撤回，相关面试日程已取消')
+    }
+    actionVisible.value = false
+    await loadData()
+    selected.value = tasks.value.find((task) => task.id === selected.value?.id) ?? null
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -289,14 +357,30 @@ onMounted(loadData)
       <template v-if="selected" #footer>
         <div class="task-actions">
           <ElButton
-            v-if="selected.status !== 'CANCELLED'"
+            v-if="selected.task_type === 'INTERVIEW' && !['CANCELLED', 'COMPLETED'].includes(selected.status)"
+            :disabled="updating"
+            @click="openInterviewAction('reschedule')"
+          >
+            调整时间
+          </ElButton>
+          <ElButton
+            v-if="selected.task_type === 'INTERVIEW' && !['CANCELLED', 'COMPLETED'].includes(selected.status)"
+            type="danger"
+            plain
+            :disabled="updating"
+            @click="openInterviewAction('withdraw')"
+          >
+            放弃申请
+          </ElButton>
+          <ElButton
+            v-if="selected.task_type !== 'INTERVIEW' && selected.status !== 'CANCELLED'"
             :disabled="updating"
             @click="updateStatus('CANCELLED')"
           >
             取消任务
           </ElButton>
           <ElButton
-            v-if="selected.status !== 'COMPLETED'"
+            v-if="['PENDING', 'CONFIRMED'].includes(selected.status)"
             type="primary"
             :loading="updating"
             @click="updateStatus(selected.status === 'PENDING' ? 'CONFIRMED' : 'COMPLETED')"
@@ -306,6 +390,69 @@ onMounted(loadData)
         </div>
       </template>
     </ElDrawer>
+
+    <ElDialog
+      v-model="actionVisible"
+      :title="interviewAction === 'reschedule' ? '调整面试时间' : '放弃这项申请'"
+      width="min(500px, 92vw)"
+      class="interview-action-dialog"
+    >
+      <div v-if="selected" class="interview-action-content">
+        <div class="action-context">
+          <span>{{ applicationName(selected.application_id) }}</span>
+          <strong>{{ selected.title }}</strong>
+        </div>
+        <template v-if="interviewAction === 'reschedule'">
+          <p>修改后仍保留当前申请和面试轮次，日程恢复为已确认。</p>
+          <label class="action-field">
+            <span>新的面试时间</span>
+            <ElDatePicker
+              v-model="rescheduleAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              format="YYYY年MM月DD日 HH:mm"
+              placeholder="选择新的面试时间"
+              class="action-date"
+            />
+          </label>
+          <label class="action-field">
+            <span>会议链接 <em>可选，线下面试可留空</em></span>
+            <ElInput
+              v-model="rescheduleMeetingUrl"
+              clearable
+              placeholder="https://example.com/meeting"
+            />
+          </label>
+        </template>
+        <template v-else>
+          <div class="withdraw-impact">
+            <strong>这会同时执行两项操作</strong>
+            <span>求职申请更新为“已撤回”</span>
+            <span>该申请下未完成的面试日程全部取消</span>
+          </div>
+          <label class="action-field">
+            <span>放弃原因</span>
+            <ElInput
+              v-model="withdrawReason"
+              type="textarea"
+              :rows="3"
+              maxlength="1000"
+              placeholder="例如：已接受其他 Offer，不再继续该流程"
+            />
+          </label>
+        </template>
+      </div>
+      <template #footer>
+        <ElButton @click="actionVisible = false">取消</ElButton>
+        <ElButton
+          :type="interviewAction === 'withdraw' ? 'danger' : 'primary'"
+          :loading="updating"
+          @click="confirmInterviewAction"
+        >
+          {{ interviewAction === 'reschedule' ? '保存新时间' : '确认放弃申请' }}
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -597,7 +744,93 @@ onMounted(loadData)
 
 .task-actions {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
+}
+
+.interview-action-content {
+  display: grid;
+  gap: 18px;
+}
+
+.interview-action-content > p {
+  margin: 0;
+  color: var(--jm-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.action-context {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  background: #f6f8fb;
+  border-left: 3px solid var(--jm-primary);
+  border-radius: 4px 9px 9px 4px;
+}
+
+.action-context span {
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+}
+
+.action-context strong {
+  color: #273142;
+  font-size: 14px;
+}
+
+.action-field {
+  display: grid;
+  gap: 8px;
+}
+
+.action-field > span {
+  color: #394353;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.action-field > span em {
+  margin-left: 5px;
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.action-date {
+  width: 100%;
+}
+
+.withdraw-impact {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  color: #8d3535;
+  background: #fff5f4;
+  border: 1px solid #f4cfcb;
+  border-radius: 9px;
+}
+
+.withdraw-impact strong {
+  font-size: 13px;
+}
+
+.withdraw-impact span {
+  position: relative;
+  padding-left: 14px;
+  font-size: 12px;
+}
+
+.withdraw-impact span::before {
+  position: absolute;
+  top: 7px;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  background: currentcolor;
+  border-radius: 50%;
+  content: '';
 }
 
 @media (max-width: 700px) {

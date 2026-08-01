@@ -7,6 +7,7 @@ export type ApplicationStage =
   | 'REJECTED'
   | 'WITHDRAWN'
 export type ApplicationStatus = 'ACTIVE' | 'CLOSED' | 'WITHDRAWN'
+export type InterviewResult = 'PENDING' | 'PASSED' | 'FAILED'
 export type ApplicationSource = 'MANUAL' | 'EMAIL'
 export type EmailCategory =
   | 'INTERVIEW'
@@ -162,6 +163,7 @@ export interface JobApplication {
   position_name: string
   location: string | null
   current_stage: ApplicationStage
+  interview_result: InterviewResult | null
   status: ApplicationStatus
   source: ApplicationSource
   applied_at: string | null
@@ -182,6 +184,18 @@ export interface JobApplicationCreate {
   contact_name?: string | null
   contact_email?: string | null
   notes?: string | null
+}
+
+export interface JobApplicationStageTransition {
+  version: number
+  proposed_stage: ApplicationStage
+  reason: string
+}
+
+export interface JobApplicationInterviewResultUpdate {
+  version: number
+  result: InterviewResult
+  reason: string
 }
 
 export interface ApplicationEvent {
@@ -226,6 +240,12 @@ export interface Task {
   version: number
   created_at: string
   updated_at: string
+}
+
+export interface InterviewTaskWithdrawApplication {
+  version: number
+  application_version: number
+  reason: string
 }
 
 export interface Reminder {

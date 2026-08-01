@@ -8,7 +8,9 @@ import {
   Link,
   Loading,
   Refresh,
+  RefreshLeft,
   Search,
+  TakeawayBox,
   User,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -47,6 +49,7 @@ const loadingList = ref(false)
 const loadingDetail = ref(false)
 const syncing = ref(false)
 const processing = ref(false)
+const movingEmail = ref(false)
 const downloadingAttachment = ref<number | null>(null)
 const workflow = ref<WorkflowRun | null>(null)
 const externalImageCount = ref(0)
@@ -141,6 +144,27 @@ async function loadBaseData() {
   }
 }
 
+async function refreshEmailList() {
+  if (loadingList.value || syncing.value) return
+  try {
+    emails.value = await emailApi.list()
+    const routeEmail = emails.value.find((email) => email.id === selectedId.value)
+    if (routeEmail) {
+      directionFilter.value = routeEmail.direction
+      return
+    }
+    if (!selectedEmail.value && filteredEmails.value[0]) {
+      await selectEmail(filteredEmails.value[0].id, false)
+    }
+  } catch {
+    // 轮询失败保持当前列表，手动同步仍会展示明确错误。
+  }
+}
+
+function handleDataPoll() {
+  void refreshEmailList()
+}
+
 function selectFirstFilteredEmail() {
   const first = filteredEmails.value[0]
   if (first) {
@@ -216,6 +240,23 @@ async function startWorkflow() {
 function openReview() {
   const taskId = workflow.value?.pending_review_task_id
   void router.push(taskId ? `/reviews/${taskId}` : '/reviews')
+}
+
+async function proposeEmailMove() {
+  if (!selectedEmail.value) return
+  movingEmail.value = true
+  try {
+    const restoring = selectedEmail.value.archive_status === 'ARCHIVED'
+    const task = restoring
+      ? await emailApi.proposeRestore(selectedEmail.value.id)
+      : await emailApi.proposeArchive(selectedEmail.value.id)
+    ElMessage.success(restoring ? '恢复申请已提交，等待审核' : '归档申请已提交，等待审核')
+    await router.push(`/reviews/${task.id}`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    movingEmail.value = false
+  }
 }
 
 function closeMobileDetail() {
@@ -297,8 +338,14 @@ watch(
   },
 )
 
-onMounted(loadBaseData)
-onUnmounted(clearInlineImageUrls)
+onMounted(() => {
+  window.addEventListener('job-mail:data-poll', handleDataPoll)
+  void loadBaseData()
+})
+onUnmounted(() => {
+  window.removeEventListener('job-mail:data-poll', handleDataPoll)
+  clearInlineImageUrls()
+})
 </script>
 
 <template>
@@ -610,6 +657,15 @@ onUnmounted(clearInlineImageUrls)
           </div>
           <span v-else />
           <div>
+            <ElButton
+              v-if="selectedEmail.archive_status !== 'PROPOSED'"
+              :icon="selectedEmail.archive_status === 'ARCHIVED' ? RefreshLeft : TakeawayBox"
+              :loading="movingEmail"
+              @click="proposeEmailMove"
+            >
+              {{ selectedEmail.archive_status === 'ARCHIVED' ? '恢复邮件' : '归档邮件' }}
+            </ElButton>
+            <ElButton v-else disabled>归档待审核</ElButton>
             <ElButton
               v-if="workflow?.pending_review_task_id"
               type="primary"

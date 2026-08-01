@@ -7,6 +7,7 @@ from app.agents.classification.schemas import ClassificationOutput
 from app.agents.common.schemas import Evidence, EvidenceSource, PreparedEmail
 from app.agents.extraction.schemas import (
     ExtractedDateTime,
+    ExtractedInterviewResult,
     ExtractedStage,
     ExtractedText,
     ExtractedUrl,
@@ -18,6 +19,7 @@ from app.domain.enums import (
     ApplicationStage,
     EmailCategory,
     EmailPriority,
+    InterviewResult,
     RequiredCapability,
 )
 
@@ -68,6 +70,11 @@ def valid_extraction_output() -> ExtractionOutput:
             confidence=0.96,
             evidence=[body_evidence("参加面试")],
         ),
+        interview_result=ExtractedInterviewResult(
+            value=InterviewResult.PENDING,
+            confidence=0.98,
+            evidence=[body_evidence("邀请您参加后端开发工程师面试")],
+        ),
         event_type=ExtractedText(
             value="INTERVIEW_INVITATION",
             confidence=0.95,
@@ -102,6 +109,7 @@ def test_extraction_accepts_evidence_and_aware_datetime() -> None:
     payload = result.model_dump(mode="json")
 
     assert payload["proposed_stage"]["value"] == "INTERVIEW"
+    assert payload["interview_result"]["value"] == "PENDING"
     assert payload["event_time"]["normalized"] == "2026-07-31T14:00:00+08:00"
     assert payload["meeting_url"]["value"] == "https://meeting.example.com/room/1"
     assert "DEADLINE" in payload["missing_fields"]

@@ -8,7 +8,7 @@ from app.agents.extraction.schemas import ExtractionInput, ExtractionOutput
 
 
 class ExtractionAgent:
-    prompt_version = "v1"
+    prompt_version = "v2"
 
     def __init__(
         self,

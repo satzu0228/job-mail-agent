@@ -1,19 +1,34 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.application.schemas import (
+    InterviewTaskWithdrawApplication,
     JobApplicationCreate,
+    JobApplicationInterviewResultUpdate,
+    JobApplicationStageTransition,
     JobApplicationUpdate,
     ReplyDraftCreate,
     ReplyDraftUpdate,
     TaskCreate,
     TaskUpdate,
 )
-from app.domain.enums import ApplicationSource, ReplyDraftStatus
+from app.application.task_linkage import settle_interview_tasks
+from app.domain.application_state import validate_stage_transition
+from app.domain.enums import (
+    ApplicationSource,
+    ApplicationStage,
+    ApplicationStatus,
+    InterviewResult,
+    ReplyDraftStatus,
+    TaskStatus,
+    TaskType,
+)
+from app.infrastructure.db.models.application_event import ApplicationEvent
 from app.infrastructure.db.models.job_application import JobApplication
+from app.infrastructure.db.models.reminder import Reminder
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.task import Task
 from app.infrastructure.db.models.user import User
@@ -21,6 +36,7 @@ from app.infrastructure.db.repositories.business import (
     EmailRepository,
     JobApplicationRepository,
     ReplyDraftRepository,
+    ResourceConflictError,
     TaskRepository,
     VersionConflictError,
 )
@@ -60,6 +76,105 @@ class BusinessCrudService:
             self._session.flush()
             return application
 
+    def transition_application_stage(
+        self,
+        application_id: int,
+        data: JobApplicationStageTransition,
+    ) -> JobApplication:
+        """执行用户明确确认的手动阶段变更，并写入可追踪时间线。"""
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+            validation = validate_stage_transition(
+                application.current_stage,
+                data.proposed_stage,
+            )
+            if not validation.can_apply:
+                raise ResourceConflictError(validation.reason)
+
+            previous = application.current_stage
+            application.current_stage = data.proposed_stage
+            if data.proposed_stage is ApplicationStage.REJECTED:
+                application.status = ApplicationStatus.CLOSED
+            elif data.proposed_stage is ApplicationStage.WITHDRAWN:
+                application.status = ApplicationStatus.WITHDRAWN
+            else:
+                application.status = ApplicationStatus.ACTIVE
+            if previous is ApplicationStage.INTERVIEW:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=(
+                        TaskStatus.CANCELLED
+                        if data.proposed_stage is ApplicationStage.WITHDRAWN
+                        else TaskStatus.COMPLETED
+                    ),
+                    current_round_only=False,
+                )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="MANUAL_STAGE_CHANGED",
+                    previous_stage=previous,
+                    proposed_stage=data.proposed_stage,
+                    confirmed_stage=data.proposed_stage,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    details={
+                        "decision_source": "USER",
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application
+
+    def update_interview_result(
+        self,
+        application_id: int,
+        data: JobApplicationInterviewResultUpdate,
+    ) -> JobApplication:
+        """记录用户确认的面试结果；结果与宏观求职阶段分别保存。"""
+        with self._session.begin():
+            application = self.applications.get(application_id, for_update=True)
+            self._check_version(application.version, data.version)
+            if application.current_stage is not ApplicationStage.INTERVIEW:
+                raise ResourceConflictError("只有面试阶段的申请可以记录面试结果")
+
+            previous_result = application.interview_result
+            application.interview_result = data.result
+            application.status = (
+                ApplicationStatus.CLOSED
+                if data.result is InterviewResult.FAILED
+                else ApplicationStatus.ACTIVE
+            )
+            if data.result in {InterviewResult.PASSED, InterviewResult.FAILED}:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=TaskStatus.COMPLETED,
+                    current_round_only=True,
+                )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="INTERVIEW_RESULT_CHANGED",
+                    previous_stage=application.current_stage,
+                    proposed_stage=application.current_stage,
+                    confirmed_stage=application.current_stage,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    details={
+                        "decision_source": "USER",
+                        "previous_result": (
+                            previous_result.value if previous_result else None
+                        ),
+                        "interview_result": data.result.value,
+                        "reason": data.reason,
+                    },
+                )
+            )
+            self._session.flush()
+            return application
+
     def create_task(self, data: TaskCreate) -> Task:
         with self._session.begin():
             self._ensure_demo_user()
@@ -74,11 +189,63 @@ class BusinessCrudService:
         with self._session.begin():
             task = self.tasks.get(task_id, for_update=True)
             self._check_version(task.version, data.version)
+            if (
+                task.task_type is TaskType.INTERVIEW
+                and data.status is TaskStatus.CANCELLED
+            ):
+                raise ResourceConflictError(
+                    "取消面试需要选择调整时间或放弃关联申请"
+                )
+            if {"start_at", "deadline_at"} & data.model_fields_set:
+                self._session.execute(
+                    delete(Reminder).where(Reminder.task_id == task.id)
+                )
             self._apply(
                 task,
                 self._db_values(
                     data.model_dump(exclude={"version"}, exclude_unset=True)
                 ),
+            )
+            self._session.flush()
+            return task
+
+    def withdraw_application_from_interview_task(
+        self,
+        task_id: int,
+        data: InterviewTaskWithdrawApplication,
+    ) -> Task:
+        """用户从面试日程放弃申请，并在同一事务取消关联日程。"""
+        with self._session.begin():
+            task = self.tasks.get(task_id, for_update=True)
+            self._check_version(task.version, data.version)
+            if task.task_type is not TaskType.INTERVIEW or task.application_id is None:
+                raise ResourceConflictError("只有已关联申请的面试日程支持放弃申请")
+            application = self.applications.get(task.application_id, for_update=True)
+            self._check_version(application.version, data.application_version)
+            previous = application.current_stage
+            application.current_stage = ApplicationStage.WITHDRAWN
+            application.status = ApplicationStatus.WITHDRAWN
+            cancelled_count = settle_interview_tasks(
+                self._session,
+                application_id=application.id,
+                status=TaskStatus.CANCELLED,
+                current_round_only=False,
+            )
+            self._session.add(
+                ApplicationEvent(
+                    application_id=application.id,
+                    event_type="APPLICATION_WITHDRAWN_FROM_CALENDAR",
+                    previous_stage=previous,
+                    proposed_stage=ApplicationStage.WITHDRAWN,
+                    confirmed_stage=ApplicationStage.WITHDRAWN,
+                    event_at=datetime.now(UTC).replace(tzinfo=None),
+                    details={
+                        "decision_source": "USER",
+                        "task_id": task.id,
+                        "cancelled_task_count": cancelled_count,
+                        "reason": data.reason,
+                    },
+                )
             )
             self._session.flush()
             return task

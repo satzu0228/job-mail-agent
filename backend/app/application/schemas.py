@@ -30,6 +30,7 @@ from app.domain.enums import (
     EmailPriority,
     ExecutionStatus,
     ExecutorType,
+    InterviewResult,
     ReminderStatus,
     ReplyDraftStatus,
     ReviewActionType,
@@ -237,6 +238,34 @@ class JobApplicationUpdate(ApiSchema):
     notes: str | None = None
 
 
+class JobApplicationStageTransition(ApiSchema):
+    version: int = Field(gt=0)
+    proposed_stage: ApplicationStage
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("阶段更新原因不能为空")
+        return normalized
+
+
+class JobApplicationInterviewResultUpdate(ApiSchema):
+    version: int = Field(gt=0)
+    result: InterviewResult
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_result_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("面试结果说明不能为空")
+        return normalized
+
+
 class JobApplicationRead(UtcResponseSchema):
     id: int
     user_id: int
@@ -245,6 +274,7 @@ class JobApplicationRead(UtcResponseSchema):
     position_name: str
     location: str | None
     current_stage: ApplicationStage
+    interview_result: InterviewResult | None
     status: ApplicationStatus
     source: ApplicationSource
     applied_at: datetime | None
@@ -407,6 +437,20 @@ class TaskUpdate(ApiSchema):
     location: str | None = Field(default=None, max_length=500)
     meeting_url: str | None = Field(default=None, max_length=2048)
     status: TaskStatus | None = None
+
+
+class InterviewTaskWithdrawApplication(ApiSchema):
+    version: int = Field(gt=0)
+    application_version: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_withdraw_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("撤回原因不能为空")
+        return normalized
 
 
 class TaskRead(UtcResponseSchema):

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Plus, Search } from '@element-plus/icons-vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { applicationApi, emailApi, taskApi } from '@/api'
@@ -20,7 +20,9 @@ import {
 } from '@/utils/format'
 import type {
   ApplicationEvent,
+  ApplicationStage,
   EmailListItem,
+  InterviewResult,
   JobApplication,
   JobApplicationCreate,
   Task,
@@ -37,10 +39,14 @@ const progressFilter = ref<ProgressFilter>('all')
 const stageFilter = ref('')
 const drawerVisible = ref(false)
 const createVisible = ref(false)
+const stageVisible = ref(false)
+const resultVisible = ref(false)
 const selected = ref<JobApplication | null>(null)
 const applicationEvents = ref<ApplicationEvent[]>([])
 const loadingEvents = ref(false)
 const saving = ref(false)
+const transitioningStage = ref(false)
+const savingResult = ref(false)
 const createFormRef = ref<FormInstance>()
 
 const createForm = reactive<JobApplicationCreate>({
@@ -63,6 +69,41 @@ const editForm = reactive({
   notes: '',
 })
 
+const stageForm = reactive({
+  proposed_stage: null as ApplicationStage | null,
+  reason: '',
+})
+
+const resultForm = reactive({
+  result: null as InterviewResult | null,
+  reason: '',
+})
+
+const interviewResultOptions: Array<{
+  value: InterviewResult
+  label: string
+  description: string
+}> = [
+  { value: 'PASSED', label: '已通过', description: '本轮面试通过，继续等待下一轮或 Offer' },
+  { value: 'FAILED', label: '未通过', description: '本轮面试未通过，申请归入已结束' },
+  { value: 'PENDING', label: '待确认', description: '尚未收到明确结果，继续等待通知' },
+]
+
+const allowedStageTransitions: Record<ApplicationStage, ApplicationStage[]> = {
+  APPLIED: ['ASSESSMENT', 'INTERVIEW', 'REJECTED', 'WITHDRAWN'],
+  ASSESSMENT: ['INTERVIEW', 'REJECTED', 'WITHDRAWN'],
+  INTERVIEW: ['OFFER', 'REJECTED', 'WITHDRAWN'],
+  OFFER: ['WITHDRAWN'],
+  REJECTED: [],
+  WITHDRAWN: [],
+}
+
+const availableStages = computed(() =>
+  selected.value && selected.value.current_stage !== 'INTERVIEW'
+    ? allowedStageTransitions[selected.value.current_stage]
+    : [],
+)
+
 const rules: FormRules = {
   company_name: [{ required: true, message: '请输入公司名称', trigger: 'blur' }],
   position_name: [{ required: true, message: '请输入投递岗位', trigger: 'blur' }],
@@ -81,6 +122,21 @@ const rows = computed(() => {
       .some((value) => String(value).toLowerCase().includes(normalized))
   })
 })
+
+const emptyMessage = computed(() => {
+  if (keyword.value || stageFilter.value) return '没有符合筛选条件的申请'
+  if (progressFilter.value === 'closed') return '暂无已结束的申请'
+  if (progressFilter.value === 'active') return '暂无进行中的申请'
+  return '还没有求职申请'
+})
+
+const showFirstApplicationAction = computed(
+  () =>
+    applications.value.length === 0 &&
+    progressFilter.value === 'all' &&
+    !keyword.value &&
+    !stageFilter.value,
+)
 
 function relatedTasks(id: number): Task[] {
   return tasks.value
@@ -121,6 +177,14 @@ function taskLabel(task: Task): string {
   return task.task_type === 'INTERVIEW'
     ? interviewRoundLabel(task.interview_round)
     : task.title
+}
+
+function interviewResultLabel(result: InterviewResult | null): string {
+  return result === 'PASSED' ? '已通过' : result === 'FAILED' ? '未通过' : '待确认'
+}
+
+function interviewResultClass(result: InterviewResult | null): string {
+  return result === 'PASSED' ? 'is-passed' : result === 'FAILED' ? 'is-failed' : 'is-pending'
 }
 
 function relatedEmails(id: number): EmailListItem[] {
@@ -205,6 +269,90 @@ async function saveApplication() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     saving.value = false
+  }
+}
+
+function openStageTransition() {
+  stageForm.proposed_stage = null
+  stageForm.reason = ''
+  stageVisible.value = true
+}
+
+async function transitionStage() {
+  if (!selected.value || !stageForm.proposed_stage) {
+    ElMessage.warning('请选择目标阶段')
+    return
+  }
+  if (!stageForm.reason.trim()) {
+    ElMessage.warning('请填写阶段变更说明')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认将“${selected.value.company_name} · ${selected.value.position_name}”从“${stageLabel(selected.value.current_stage)}”更新为“${stageLabel(stageForm.proposed_stage)}”？`,
+      '确认更新阶段',
+      {
+        confirmButtonText: '确认更新',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  transitioningStage.value = true
+  try {
+    const updated = await applicationApi.transitionStage(selected.value.id, {
+      version: selected.value.version,
+      proposed_stage: stageForm.proposed_stage,
+      reason: stageForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === updated.id)
+    if (index >= 0) applications.value[index] = updated
+    selected.value = updated
+    applicationEvents.value = (await applicationApi.events(updated.id)).items
+    stageVisible.value = false
+    ElMessage.success('申请阶段已更新')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    transitioningStage.value = false
+  }
+}
+
+function openInterviewResult(application: JobApplication) {
+  selected.value = application
+  resultForm.result = application.interview_result ?? 'PENDING'
+  resultForm.reason = ''
+  resultVisible.value = true
+}
+
+async function updateInterviewResult() {
+  if (!selected.value || !resultForm.result) return
+  if (!resultForm.reason.trim()) {
+    ElMessage.warning('请说明结果来源')
+    return
+  }
+  savingResult.value = true
+  try {
+    const updated = await applicationApi.updateInterviewResult(selected.value.id, {
+      version: selected.value.version,
+      result: resultForm.result,
+      reason: resultForm.reason.trim(),
+    })
+    const index = applications.value.findIndex((item) => item.id === updated.id)
+    if (index >= 0) applications.value[index] = updated
+    selected.value = updated
+    if (drawerVisible.value) {
+      applicationEvents.value = (await applicationApi.events(updated.id)).items
+    }
+    resultVisible.value = false
+    ElMessage.success(`面试结果已更新为“${interviewResultLabel(updated.interview_result)}”`)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    savingResult.value = false
   }
 }
 
@@ -306,6 +454,20 @@ onMounted(loadData)
             </ElTag>
           </template>
         </ElTableColumn>
+        <ElTableColumn label="面试结果" width="126">
+          <template #default="{ row }">
+            <button
+              v-if="row.current_stage === 'INTERVIEW'"
+              type="button"
+              class="result-pill"
+              :class="interviewResultClass(row.interview_result)"
+              @click.stop="openInterviewResult(row)"
+            >
+              <span />{{ interviewResultLabel(row.interview_result) }}
+            </button>
+            <span v-else class="quiet">—</span>
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="投递时间" width="126" sortable>
           <template #default="{ row }">{{ formatDate(row.applied_at) }}</template>
         </ElTableColumn>
@@ -338,8 +500,8 @@ onMounted(loadData)
         </ElTableColumn>
         <template #empty>
           <div class="table-empty">
-            <p>{{ keyword || stageFilter ? '没有符合筛选条件的申请' : '还没有求职申请' }}</p>
-            <ElButton v-if="!keyword && !stageFilter" type="primary" plain @click="createVisible = true">
+            <p>{{ emptyMessage }}</p>
+            <ElButton v-if="showFirstApplicationAction" type="primary" plain @click="createVisible = true">
               新建第一项申请
             </ElButton>
           </div>
@@ -354,16 +516,30 @@ onMounted(loadData)
     >
       <div v-if="selected" class="application-drawer">
         <div class="drawer-stage">
-          <div>
-            <span>当前阶段</span>
-            <ElTag :type="stageMeta[selected.current_stage].type" effect="light" size="large">
-              {{ applicationStageLabel(selected) }}
-            </ElTag>
+          <div class="stage-identity">
+            <span>当前进度</span>
+            <strong>{{ applicationStageLabel(selected) }}</strong>
+            <button
+              v-if="selected.current_stage === 'INTERVIEW'"
+              type="button"
+              class="result-pill"
+              :class="interviewResultClass(selected.interview_result)"
+              @click="openInterviewResult(selected)"
+            >
+              <span />{{ interviewResultLabel(selected.interview_result) }}
+            </button>
           </div>
           <p v-if="interviewTask(selected.id)">
-            面试时间 {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
+            {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
           </p>
-          <p v-else>阶段来自用户确认后的业务状态，不能在此直接修改。</p>
+          <ElButton
+            v-if="availableStages.length"
+            type="primary"
+            plain
+            @click="openStageTransition"
+          >
+            更新阶段
+          </ElButton>
         </div>
 
         <ElTabs>
@@ -469,6 +645,90 @@ onMounted(loadData)
       </div>
     </ElDrawer>
 
+    <ElDialog
+      v-model="resultVisible"
+      title="记录面试结果"
+      width="min(560px, 92vw)"
+      class="result-dialog"
+    >
+      <template #header>
+        <div class="result-dialog-heading">
+          <span>记录面试结果</span>
+          <small v-if="selected">{{ selected.company_name }} · {{ selected.position_name }}</small>
+        </div>
+      </template>
+      <div v-if="selected" class="result-editor">
+        <div class="result-current">
+          <span>当前进度</span>
+          <strong>{{ applicationStageLabel(selected) }}</strong>
+          <i>选择本轮面试的最新结果</i>
+        </div>
+        <div class="result-options" role="radiogroup" aria-label="面试结果">
+          <button
+            v-for="option in interviewResultOptions"
+            :key="option.value"
+            type="button"
+            class="result-option"
+            :class="[{ active: resultForm.result === option.value }, interviewResultClass(option.value)]"
+            role="radio"
+            :aria-checked="resultForm.result === option.value"
+            @click="resultForm.result = option.value"
+          >
+            <span class="option-mark" />
+            <strong>{{ option.label }}</strong>
+            <small>{{ option.description }}</small>
+          </button>
+        </div>
+        <label class="result-reason">
+          <span>结果来源</span>
+          <ElInput
+            v-model="resultForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            placeholder="例如：招聘网站显示一面通过，等待二面安排"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <ElButton @click="resultVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="savingResult" @click="updateInterviewResult">
+          保存面试结果
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog v-model="stageVisible" title="更新申请阶段" width="min(460px, 92vw)">
+      <ElForm label-position="top">
+        <ElFormItem label="目标阶段" required>
+          <ElSelect v-model="stageForm.proposed_stage" placeholder="请选择目标阶段" class="full-width">
+            <ElOption
+              v-for="stage in availableStages"
+              :key="stage"
+              :label="stageLabel(stage)"
+              :value="stage"
+            />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="变更说明" required>
+          <ElInput
+            v-model="stageForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            show-word-limit
+            placeholder="例如：招聘网站显示已进入二面，或电话通知未通过"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="stageVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="transitioningStage" @click="transitionStage">
+          更新阶段
+        </ElButton>
+      </template>
+    </ElDialog>
+
     <ElDialog v-model="createVisible" title="新建求职申请" width="min(560px, 92vw)">
       <ElForm ref="createFormRef" :model="createForm" :rules="rules" label-position="top">
         <div class="form-grid">
@@ -551,6 +811,10 @@ onMounted(loadData)
   width: 130px;
 }
 
+.full-width {
+  width: 100%;
+}
+
 .progress-table {
   min-height: 0;
   overflow: hidden;
@@ -562,6 +826,49 @@ onMounted(loadData)
 
 .company-name {
   font-weight: 500;
+}
+
+.result-pill {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 9px;
+  color: #5f6b7a;
+  font: inherit;
+  font-size: 12px;
+  background: #f5f7fa;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.result-pill > span {
+  width: 6px;
+  height: 6px;
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+.result-pill.is-passed {
+  color: #16835f;
+  background: #ecf8f3;
+}
+
+.result-pill.is-failed {
+  color: #c04444;
+  background: #fff1f0;
+}
+
+.result-pill.is-pending {
+  color: #9a6818;
+  background: #fff7e6;
+}
+
+.result-pill:hover,
+.result-pill:focus-visible {
+  border-color: currentcolor;
+  outline: none;
 }
 
 .next-task {
@@ -612,19 +919,26 @@ onMounted(loadData)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 0;
+  gap: 16px;
+  padding: 18px 0;
   border-bottom: 1px solid var(--jm-border-light);
 }
 
-.drawer-stage > div {
+.drawer-stage .stage-identity {
   display: flex;
-  gap: 10px;
+  gap: 9px;
   align-items: center;
 }
 
-.drawer-stage > div > span {
+.stage-identity > span {
   color: var(--jm-text-secondary);
   font-size: 12px;
+}
+
+.stage-identity > strong {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .drawer-stage p {
@@ -634,6 +948,126 @@ onMounted(loadData)
   font-size: 11px;
   text-align: right;
   white-space: nowrap;
+}
+
+.result-dialog-heading {
+  display: grid;
+  gap: 5px;
+}
+
+.result-dialog-heading > span {
+  color: #20242b;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.result-dialog-heading small {
+  color: var(--jm-text-tertiary);
+  font-size: 12px;
+}
+
+.result-editor {
+  display: grid;
+  gap: 20px;
+}
+
+.result-current {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 14px 16px;
+  background: #f6f8fb;
+  border-left: 3px solid var(--jm-primary);
+  border-radius: 4px 10px 10px 4px;
+}
+
+.result-current span,
+.result-current i {
+  color: var(--jm-text-tertiary);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.result-current strong {
+  color: #1e2735;
+  font-size: 16px;
+}
+
+.result-current i {
+  grid-column: 2;
+}
+
+.result-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-option {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 5px 8px;
+  min-height: 92px;
+  padding: 14px;
+  color: #45505f;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #dfe3e9;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.result-option:hover {
+  transform: translateY(-1px);
+  border-color: #aeb8c6;
+  box-shadow: 0 5px 16px rgb(31 42 55 / 7%);
+}
+
+.result-option.active {
+  border-color: currentcolor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentcolor 13%, transparent);
+}
+
+.result-option.is-passed { color: #16835f; }
+.result-option.is-failed { color: #c04444; }
+.result-option.is-pending { color: #9a6818; }
+
+.option-mark {
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  border: 2px solid currentcolor;
+  border-radius: 50%;
+}
+
+.result-option.active .option-mark {
+  background: currentcolor;
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.result-option strong {
+  color: #28313e;
+  font-size: 14px;
+}
+
+.result-option small {
+  grid-column: 2;
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.result-reason {
+  display: grid;
+  gap: 8px;
+}
+
+.result-reason > span {
+  color: #394353;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .drawer-form {
@@ -739,6 +1173,14 @@ onMounted(loadData)
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .result-options {
+    grid-template-columns: 1fr;
+  }
+
+  .result-option {
+    min-height: 0;
   }
 }
 </style>

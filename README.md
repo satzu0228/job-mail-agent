@@ -10,7 +10,8 @@ SMTP 幂等发送均已实现。Vue 3 前端现已提供邮件、求职进度、
 项目背景和长期协作约定见
 [AGENTS.md](AGENTS.md)。
 
-下一阶段进入系统测试与优化，优先补齐 Playwright 端到端、异常和回归验证。
+第十一阶段系统测试正在执行，当前自动化基线和未通过边界见
+[系统测试进展](docs/phase-11/system-test-progress.md)。
 
 全部文档按职责分类，统一从 [项目文档导航](docs/README.md) 进入。
 
@@ -49,6 +50,23 @@ npm run dev
 ```
 
 详细说明见 [前端说明](frontend/README.md)。
+
+## 自动化回归
+
+```powershell
+cd backend
+python -m ruff check app tests
+python -m pytest --cov=app --cov-report=term-missing
+
+cd ..\frontend
+npm test
+npm run type-check
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Playwright 失败证据和 HTML 报告输出到根目录 `.artifacts/`，不进入版本控制。
 
 ## 第一阶段参考项目
 

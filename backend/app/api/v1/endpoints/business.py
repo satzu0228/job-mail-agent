@@ -23,9 +23,12 @@ from app.application.schemas import (
     EmailPage,
     EmailSyncRequest,
     EmailSyncResult,
+    InterviewTaskWithdrawApplication,
     JobApplicationCreate,
+    JobApplicationInterviewResultUpdate,
     JobApplicationPage,
     JobApplicationRead,
+    JobApplicationStageTransition,
     JobApplicationUpdate,
     ReminderRead,
     ReminderReadUpdate,
@@ -239,13 +242,16 @@ def download_email_attachment(
     use_case: EmailAccessDependency,
 ) -> Response:
     attachment = use_case.download_attachment(email_id, attachment_index)
+    safe_ascii_characters = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._- "
+    )
     ascii_name = "".join(
-        character if 32 <= ord(character) < 127 else "_"
+        character if character in safe_ascii_characters else "_"
         for character in attachment.filename
-    ).replace('"', "_").replace("\\", "_")
+    ).strip() or "attachment"
     disposition = (
         f"attachment; filename=\"{ascii_name}\"; "
-        f"filename*=UTF-8''{quote(attachment.filename)}"
+        f"filename*=UTF-8''{quote(attachment.filename, safe='')}"
     )
     return Response(
         content=attachment.content,
@@ -384,6 +390,36 @@ def update_application(
     )
 
 
+@router.post(
+    "/job-applications/{application_id}/stage-transitions",
+    response_model=JobApplicationRead,
+    tags=["job-applications"],
+)
+def transition_application_stage(
+    application_id: int,
+    payload: JobApplicationStageTransition,
+    use_case: ServiceDependency,
+) -> JobApplicationRead:
+    return JobApplicationRead.model_validate(
+        use_case.transition_application_stage(application_id, payload)
+    )
+
+
+@router.post(
+    "/job-applications/{application_id}/interview-result",
+    response_model=JobApplicationRead,
+    tags=["job-applications"],
+)
+def update_application_interview_result(
+    application_id: int,
+    payload: JobApplicationInterviewResultUpdate,
+    use_case: ServiceDependency,
+) -> JobApplicationRead:
+    return JobApplicationRead.model_validate(
+        use_case.update_interview_result(application_id, payload)
+    )
+
+
 @router.get("/tasks", response_model=list[TaskRead], tags=["tasks"])
 def list_tasks(
     use_case: ServiceDependency,
@@ -440,6 +476,21 @@ def update_task(
     use_case: ServiceDependency,
 ) -> TaskRead:
     return TaskRead.model_validate(use_case.update_task(task_id, payload))
+
+
+@router.post(
+    "/tasks/{task_id}/withdraw-application",
+    response_model=TaskRead,
+    tags=["tasks"],
+)
+def withdraw_application_from_interview_task(
+    task_id: int,
+    payload: InterviewTaskWithdrawApplication,
+    use_case: ServiceDependency,
+) -> TaskRead:
+    return TaskRead.model_validate(
+        use_case.withdraw_application_from_interview_task(task_id, payload)
+    )
 
 
 @router.get("/reminders", response_model=list[ReminderRead], tags=["reminders"])

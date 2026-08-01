@@ -23,6 +23,8 @@
 ## 4. 开发计划
 
 - [开发实施计划](plans/implementation-plan.md)：记录阶段任务、交付物、测试和风险控制。
+- [第十一阶段系统测试计划](plans/phase-11-system-test-plan.md)：定义 AC-01～AC-10
+  验收矩阵、Playwright 场景、异常/安全/性能测试和阶段退出标准。
 
 ## 5. 阶段进展记录
 
@@ -46,6 +48,8 @@
   求职进度、邮件/审核/日程/设置交互及真实数据浏览器验收。
 - [第十阶段完成记录](phase-10/automatic-sync-and-reminders-progress.md)：轻量定时同步、
   新邮件工作流触发、内部提醒持久化与前端提醒交互。
+- [第十一阶段系统测试进展](phase-11/system-test-progress.md)：记录 Playwright、异常与
+  安全检查、性能基准、真实外部联调、缺陷修复和未通过边界。
 
 ## 文档职责规则
 

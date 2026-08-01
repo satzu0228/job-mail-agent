@@ -7,7 +7,12 @@ from sqlalchemy import ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import ApplicationSource, ApplicationStage, ApplicationStatus
+from app.domain.enums import (
+    ApplicationSource,
+    ApplicationStage,
+    ApplicationStatus,
+    InterviewResult,
+)
 from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin, varchar_enum
 
 if TYPE_CHECKING:
@@ -58,6 +63,10 @@ class JobApplication(TimestampMixin, Base):
         nullable=False,
         default=ApplicationStatus.ACTIVE,
         server_default=ApplicationStatus.ACTIVE.value,
+    )
+    interview_result: Mapped[InterviewResult | None] = mapped_column(
+        varchar_enum(InterviewResult, name="interview_result", length=16),
+        nullable=True,
     )
     source: Mapped[ApplicationSource] = mapped_column(
         varchar_enum(ApplicationSource, name="application_source", length=32),

@@ -59,6 +59,14 @@ class Email(TimestampMixin, Base):
     previous_folder: Mapped[str | None] = mapped_column(String(255), nullable=True)
     uid_validity: Mapped[int] = mapped_column(mysql.BIGINT(unsigned=True), nullable=False)
     imap_uid: Mapped[int] = mapped_column(mysql.BIGINT(unsigned=True), nullable=False)
+    current_uid_validity: Mapped[int | None] = mapped_column(
+        mysql.BIGINT(unsigned=True),
+        nullable=True,
+    )
+    current_imap_uid: Mapped[int | None] = mapped_column(
+        mysql.BIGINT(unsigned=True),
+        nullable=True,
+    )
     message_id: Mapped[str | None] = mapped_column(String(998), nullable=True)
     subject: Mapped[str] = mapped_column(String(998), nullable=False)
     from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

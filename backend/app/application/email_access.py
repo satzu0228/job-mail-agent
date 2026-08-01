@@ -334,6 +334,8 @@ class EmailAccessService:
                         current_folder=INBOX,
                         uid_validity=uid_validity,
                         imap_uid=remote.uid,
+                        current_uid_validity=uid_validity,
+                        current_imap_uid=remote.uid,
                         subject="(解析失败)",
                         from_address="unknown@invalid.local",
                         to_recipients=[],
@@ -363,6 +365,8 @@ class EmailAccessService:
             current_folder=INBOX,
             uid_validity=uid_validity,
             imap_uid=imap_uid,
+            current_uid_validity=uid_validity,
+            current_imap_uid=imap_uid,
             **parsed.__dict__,
         )
 

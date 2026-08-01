@@ -9,6 +9,9 @@ import type {
   EmailSyncResult,
   JobApplication,
   JobApplicationCreate,
+  JobApplicationInterviewResultUpdate,
+  JobApplicationStageTransition,
+  InterviewTaskWithdrawApplication,
   Page,
   ReviewDecisionResponse,
   Reminder,
@@ -61,6 +64,10 @@ export const emailApi = {
     }),
   startWorkflow: (id: number) =>
     http.post<WorkflowRun>(`/emails/${id}/workflow-runs`).then(({ data }) => data),
+  proposeArchive: (id: number) =>
+    http.post<ReviewTask>(`/emails/${id}/archive-review`).then(({ data }) => data),
+  proposeRestore: (id: number) =>
+    http.post<ReviewTask>(`/emails/${id}/restore-review`).then(({ data }) => data),
   getWorkflow: (id: string) =>
     http.get<WorkflowRun>(`/workflow-runs/${id}`).then(({ data }) => data),
 }
@@ -74,6 +81,14 @@ export const applicationApi = {
     http.post<JobApplication>('/job-applications', payload).then(({ data }) => data),
   update: (id: number, payload: Partial<JobApplication> & { version: number }) =>
     http.patch<JobApplication>(`/job-applications/${id}`, payload).then(({ data }) => data),
+  transitionStage: (id: number, payload: JobApplicationStageTransition) =>
+    http
+      .post<JobApplication>(`/job-applications/${id}/stage-transitions`, payload)
+      .then(({ data }) => data),
+  updateInterviewResult: (id: number, payload: JobApplicationInterviewResultUpdate) =>
+    http
+      .post<JobApplication>(`/job-applications/${id}/interview-result`, payload)
+      .then(({ data }) => data),
   events: (id: number, offset = 0, limit = 100) =>
     http
       .get<Page<ApplicationEvent>>(`/job-applications/${id}/events`, {
@@ -87,6 +102,10 @@ export const taskApi = {
     http.get<Task[]>('/tasks', { params: { limit } }).then(({ data }) => data),
   update: (id: number, payload: Partial<Task> & { version: number }) =>
     http.patch<Task>(`/tasks/${id}`, payload).then(({ data }) => data),
+  withdrawApplication: (id: number, payload: InterviewTaskWithdrawApplication) =>
+    http
+      .post<Task>(`/tasks/${id}/withdraw-application`, payload)
+      .then(({ data }) => data),
 }
 
 export const reminderApi = {

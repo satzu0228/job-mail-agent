@@ -24,18 +24,23 @@ from app.application.schemas import (
     ReviewDecision,
     ReviewDecisionResponse,
 )
+from app.application.task_linkage import settle_interview_tasks
 from app.domain.application_state import StageTransitionStatus, validate_stage_transition
 from app.domain.enums import (
     ApplicationSource,
     ApplicationStage,
     ApplicationStatus,
     DecisionSource,
+    EmailCategory,
     ExecutionStatus,
     ExecutorType,
+    InterviewResult,
     ReplyDraftStatus,
     ReviewActionType,
     ReviewTaskStatus,
     RiskLevel,
+    TaskStatus,
+    TaskType,
     WorkflowRunStatus,
 )
 from app.infrastructure.db.models.action_execution import ActionExecution
@@ -45,6 +50,7 @@ from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
+from app.infrastructure.db.models.task import Task
 from app.infrastructure.db.models.workflow_run import WorkflowRun
 from app.infrastructure.db.repositories import (
     EmailRepository,
@@ -222,7 +228,7 @@ class ApplicationManagementService:
                 application,
                 linked_sender_match=application.id in linked_sender_ids,
             )
-            if candidate.deterministic_score >= 0.15:
+            if _is_candidate_eligible(email, analysis, application, candidate):
                 candidate_values.append(candidate)
         candidate_values.sort(
             key=lambda item: (-item.deterministic_score, item.application_id)
@@ -345,11 +351,7 @@ class ApplicationManagementService:
         selected_application = (
             self._session.get(JobApplication, selected) if selected is not None else None
         )
-        action_type = (
-            ReviewActionType.CREATE_APPLICATION
-            if suggestion.recommendation is ApplicationRecommendation.CREATE_NEW
-            else ReviewActionType.LINK_APPLICATION
-        )
+        action_type = _application_review_action(suggestion, candidates)
         payload = {
             "schema_version": "application-review.v1",
             "analysis_id": analysis.id,
@@ -365,6 +367,9 @@ class ApplicationManagementService:
             ),
             "event_type": analysis.event_type,
             "summary": analysis.summary,
+            "interview_result": _extracted_interview_result(
+                analysis.extraction_json
+            ),
             "agent_output": suggestion.model_dump(mode="json"),
             "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
         }
@@ -547,26 +552,43 @@ class ReviewTaskService:
             self._validate_approved_payload(task, payload)
             now = _utc_now()
             task.status = ReviewTaskStatus.EXECUTING
+            is_task_action = task.action_type is ReviewActionType.CREATE_TASK
             execution = ActionExecution(
                 review_task_id=task.id,
                 attempt_no=1,
                 idempotency_key=f"execute:{task.id}:1",
-                executor_type=ExecutorType.APPLICATION,
+                executor_type=(ExecutorType.TASK if is_task_action else ExecutorType.APPLICATION),
                 status=ExecutionStatus.RUNNING,
                 started_at=now,
             )
             self._session.add(execution)
             self._session.flush()
 
-            application = self._execute(task, payload)
-            follow_up = self._create_stage_follow_up(task, application, payload)
+            if is_task_action:
+                scheduled_task = self._execute_task(task, payload)
+                application = self._owned_application(scheduled_task.application_id)
+                follow_up = None
+                external_reference = f"task:{scheduled_task.id}"
+                result = {
+                    "task_id": scheduled_task.id,
+                    "application_id": application.id,
+                    "email_id": task.source_email_id,
+                    "follow_up_review_task_id": None,
+                }
+            else:
+                application = self._execute(task, payload)
+                follow_up = self._create_stage_follow_up(task, application, payload)
+                if follow_up is None:
+                    follow_up = self._create_task_follow_up(task, application)
+                external_reference = f"job_application:{application.id}"
+                result = {
+                    "application_id": application.id,
+                    "email_id": task.source_email_id,
+                    "follow_up_review_task_id": follow_up.id if follow_up else None,
+                }
             execution.status = ExecutionStatus.SUCCEEDED
-            execution.external_reference = f"job_application:{application.id}"
-            execution.result = {
-                "application_id": application.id,
-                "email_id": task.source_email_id,
-                "follow_up_review_task_id": follow_up.id if follow_up else None,
-            }
+            execution.external_reference = external_reference
+            execution.result = result
             execution.finished_at = _utc_now()
             task.status = ReviewTaskStatus.SUCCEEDED
             if update_workflow:
@@ -611,8 +633,41 @@ class ReviewTaskService:
                 )
             proposed = _application_stage(payload.get("proposed_stage"))
             validation = validate_stage_transition(application.current_stage, proposed)
-            if not validation.can_apply:
+            result = _interview_result(payload.get("interview_result"))
+            result_change = (
+                proposed is ApplicationStage.INTERVIEW
+                and result is not None
+                and result is not application.interview_result
+            )
+            if not validation.can_apply and not result_change:
                 raise ResourceConflictError(validation.reason)
+        elif task.action_type is ReviewActionType.CREATE_TASK:
+            application = self._owned_application(task.application_id)
+            self._owned_email(task.source_email_id)
+            if payload.get("application_id") != application.id:
+                raise ResourceConflictError("日程审核引用的求职申请无效")
+            if payload.get("source_email_id") != task.source_email_id:
+                raise ResourceConflictError("日程审核引用的来源邮件无效")
+            if payload.get("task_type") != TaskType.INTERVIEW.value:
+                raise ResourceConflictError("当前智能工作流只支持创建面试日程")
+            round_value = payload.get("interview_round")
+            if not isinstance(round_value, int) or not 1 <= round_value <= 20:
+                raise ResourceConflictError("面试日程必须包含 1～20 的面试轮次")
+            if _review_datetime(payload.get("start_at")) is None:
+                raise ResourceConflictError("面试日程必须包含明确的开始时间")
+            if not _optional_text(payload.get("title")):
+                raise ResourceConflictError("面试日程必须包含标题")
+            text_limits = (
+                ("title", 255),
+                ("raw_time_text", 500),
+                ("source_timezone", 64),
+                ("location", 500),
+                ("meeting_url", 2048),
+            )
+            for field_name, limit in text_limits:
+                value = payload.get(field_name)
+                if value is not None and (not isinstance(value, str) or len(value) > limit):
+                    raise ResourceConflictError(f"日程字段 {field_name} 无效")
         elif task.action_type is ReviewActionType.SEND_REPLY:
             unexpected = set(task.reviewed_payload or {}) - {"body"}
             if unexpected:
@@ -638,6 +693,28 @@ class ReviewTaskService:
                 raise ResourceConflictError("批准回复时正文不能为空")
             if len(body) > 20_000:
                 raise ResourceConflictError("回复正文超过长度限制")
+        elif task.action_type in {
+            ReviewActionType.ARCHIVE_EMAIL,
+            ReviewActionType.RESTORE_EMAIL,
+        }:
+            email = self._owned_email(task.source_email_id)
+            proposed = task.proposed_payload
+            protected = {
+                "source_folder",
+                "source_uid_validity",
+                "source_uid",
+                "target_folder",
+            }
+            if any(payload.get(key) != proposed.get(key) for key in protected):
+                raise ResourceConflictError("邮件移动审核不允许修改文件夹或 UID")
+            current_uid = email.current_imap_uid or email.imap_uid
+            current_uid_validity = email.current_uid_validity or email.uid_validity
+            if (
+                email.current_folder != proposed.get("source_folder")
+                or current_uid != proposed.get("source_uid")
+                or current_uid_validity != proposed.get("source_uid_validity")
+            ):
+                raise ResourceConflictError("邮件当前位置已变化，请重新发起审核")
         else:
             raise ResourceConflictError("当前阶段不支持执行该审核动作")
 
@@ -721,21 +798,71 @@ class ReviewTaskService:
 
         proposed = _application_stage(payload.get("proposed_stage"))
         previous = application.current_stage
+        previous_result = application.interview_result
         application.current_stage = proposed
-        if proposed is ApplicationStage.REJECTED:
+        extracted_result = _interview_result(payload.get("interview_result"))
+        if proposed is ApplicationStage.INTERVIEW and extracted_result is not None:
+            application.interview_result = extracted_result
+        elif proposed is ApplicationStage.REJECTED and previous is ApplicationStage.INTERVIEW:
+            application.interview_result = InterviewResult.FAILED
+        elif proposed is ApplicationStage.OFFER and previous is ApplicationStage.INTERVIEW:
+            application.interview_result = InterviewResult.PASSED
+
+        if application.interview_result is InterviewResult.FAILED:
             application.status = ApplicationStatus.CLOSED
         elif proposed is ApplicationStage.WITHDRAWN:
             application.status = ApplicationStatus.WITHDRAWN
+        else:
+            application.status = ApplicationStatus.ACTIVE
+        if previous is ApplicationStage.INTERVIEW:
+            if proposed is ApplicationStage.WITHDRAWN:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=TaskStatus.CANCELLED,
+                    current_round_only=False,
+                )
+            elif proposed is not ApplicationStage.INTERVIEW:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=TaskStatus.COMPLETED,
+                    current_round_only=False,
+                )
+            elif application.interview_result in {
+                InterviewResult.PASSED,
+                InterviewResult.FAILED,
+            }:
+                settle_interview_tasks(
+                    self._session,
+                    application_id=application.id,
+                    status=TaskStatus.COMPLETED,
+                    current_round_only=True,
+                )
         self._session.add(
             ApplicationEvent(
                 application_id=application.id,
                 source_email_id=task.source_email_id,
                 workflow_run_id=task.workflow_run_id,
-                event_type="STAGE_CHANGED",
+                event_type=(
+                    "INTERVIEW_RESULT_CHANGED"
+                    if previous is proposed and previous_result != application.interview_result
+                    else "STAGE_CHANGED"
+                ),
                 previous_stage=previous,
                 proposed_stage=proposed,
                 confirmed_stage=proposed,
-                details={"review_task_id": task.id},
+                details={
+                    "review_task_id": task.id,
+                    "previous_result": (
+                        previous_result.value if previous_result else None
+                    ),
+                    "interview_result": (
+                        application.interview_result.value
+                        if application.interview_result
+                        else None
+                    ),
+                },
             )
         )
         return application
@@ -754,24 +881,33 @@ class ReviewTaskService:
             return None
         proposed = _application_stage(proposed_value)
         validation = validate_stage_transition(application.current_stage, proposed)
+        result = _interview_result(payload.get("interview_result"))
+        result_change = (
+            proposed is ApplicationStage.INTERVIEW
+            and result is not None
+            and result is not application.interview_result
+        )
         if validation.status is StageTransitionStatus.NO_CHANGE:
-            self._session.add(
-                ApplicationEvent(
-                    application_id=application.id,
-                    source_email_id=source_task.source_email_id,
-                    workflow_run_id=source_task.workflow_run_id,
-                    event_type=payload.get("event_type") or "EMAIL_EVENT",
-                    previous_stage=application.current_stage,
-                    proposed_stage=proposed,
-                    confirmed_stage=application.current_stage,
-                    details={
-                        "review_task_id": source_task.id,
-                        "stage_changed": False,
-                        "summary": payload.get("summary"),
-                    },
+            if result_change:
+                pass
+            else:
+                self._session.add(
+                    ApplicationEvent(
+                        application_id=application.id,
+                        source_email_id=source_task.source_email_id,
+                        workflow_run_id=source_task.workflow_run_id,
+                        event_type=payload.get("event_type") or "EMAIL_EVENT",
+                        previous_stage=application.current_stage,
+                        proposed_stage=proposed,
+                        confirmed_stage=application.current_stage,
+                        details={
+                            "review_task_id": source_task.id,
+                            "stage_changed": False,
+                            "summary": payload.get("summary"),
+                        },
+                    )
                 )
-            )
-            return None
+                return None
         if validation.status is StageTransitionStatus.REJECTED:
             return None
 
@@ -786,8 +922,11 @@ class ReviewTaskService:
             proposed_payload={
                 "schema_version": "stage-review.v1",
                 "application_id": application.id,
+                "company_name": application.company_name,
+                "position_name": application.position_name,
                 "previous_stage": application.current_stage.value,
                 "proposed_stage": proposed.value,
+                "interview_result": result.value if result else None,
                 "validation": {
                     "status": validation.status.value,
                     "reason": validation.reason,
@@ -796,13 +935,135 @@ class ReviewTaskService:
             },
             status=ReviewTaskStatus.PENDING,
             idempotency_key=(
-                f"stage:{source_task.id}:{application.id}:{proposed.value}"
+                f"stage:{source_task.id}:{application.id}:{proposed.value}:"
+                f"{result.value if result else 'NONE'}"
             ),
             resource_version=application.version,
         )
         self._session.add(follow_up)
         self._session.flush()
         return follow_up
+
+    def _create_task_follow_up(
+        self,
+        source_task: ReviewTask,
+        application: JobApplication,
+    ) -> ReviewTask | None:
+        """将已确认关联的面试时间转换为独立日程审核，避免模型直接写业务表。"""
+        if source_task.action_type is ReviewActionType.CREATE_TASK:
+            return None
+        analysis = self._session.scalar(
+            select(EmailAnalysis).where(
+                EmailAnalysis.email_id == source_task.source_email_id,
+                EmailAnalysis.workflow_run_id == source_task.workflow_run_id,
+            )
+        )
+        if (
+            analysis is None
+            or analysis.category is not EmailCategory.INTERVIEW
+            or analysis.event_time is None
+        ):
+            return None
+
+        extraction = analysis.extraction_json or {}
+        event_time = extraction.get("event_time")
+        raw_time_text = (
+            event_time.get("raw_text")
+            if isinstance(event_time, dict) and isinstance(event_time.get("raw_text"), str)
+            else None
+        )
+        location = _extracted_value(extraction.get("location"))
+        meeting_url = _extracted_value(extraction.get("meeting_url"))
+        interview_round = self._infer_interview_round(
+            application.id,
+            " ".join(
+                value
+                for value in (raw_time_text, analysis.event_type, analysis.summary)
+                if value
+            ),
+        )
+        round_label = _interview_round_label(interview_round)
+        idempotency_key = f"interview-task:{analysis.id}:{application.id}"
+        existing = self._session.scalar(
+            select(ReviewTask).where(ReviewTask.idempotency_key == idempotency_key)
+        )
+        if existing is not None:
+            return existing
+
+        follow_up = ReviewTask(
+            id=str(uuid4()),
+            user_id=self._user_id,
+            workflow_run_id=source_task.workflow_run_id,
+            source_email_id=source_task.source_email_id,
+            application_id=application.id,
+            action_type=ReviewActionType.CREATE_TASK,
+            risk_level=RiskLevel.HIGH,
+            proposed_payload={
+                "schema_version": "task-review.v1",
+                "application_id": application.id,
+                "company_name": application.company_name,
+                "position_name": application.position_name,
+                "source_email_id": source_task.source_email_id,
+                "task_type": TaskType.INTERVIEW.value,
+                "interview_round": interview_round,
+                "title": f"{application.company_name}{round_label}",
+                "description": analysis.summary,
+                "raw_time_text": raw_time_text,
+                "start_at": (
+                    analysis.event_time.replace(tzinfo=UTC)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                ),
+                "deadline_at": None,
+                "source_timezone": analysis.source_timezone,
+                "location": location,
+                "meeting_url": meeting_url,
+                "source_review_task_id": source_task.id,
+            },
+            status=ReviewTaskStatus.PENDING,
+            idempotency_key=idempotency_key,
+            resource_version=0,
+        )
+        self._session.add(follow_up)
+        self._session.flush()
+        return follow_up
+
+    def _infer_interview_round(self, application_id: int, text: str) -> int:
+        explicit = _parse_interview_round(text)
+        if explicit is not None:
+            return explicit
+        latest = self._session.scalar(
+            select(func.max(Task.interview_round)).where(
+                Task.application_id == application_id,
+                Task.task_type == TaskType.INTERVIEW,
+            )
+        )
+        return int(latest or 0) + 1
+
+    def _execute_task(self, review_task: ReviewTask, payload: dict[str, Any]) -> Task:
+        task = Task(
+            user_id=self._user_id,
+            application_id=review_task.application_id,
+            source_email_id=review_task.source_email_id,
+            source_review_task_id=review_task.id,
+            task_type=TaskType.INTERVIEW,
+            interview_round=int(payload["interview_round"]),
+            title=str(payload["title"]).strip(),
+            description=_optional_text(payload.get("description")),
+            raw_time_text=_optional_text(payload.get("raw_time_text")),
+            start_at=_review_datetime(payload.get("start_at")),
+            deadline_at=_review_datetime(payload.get("deadline_at")),
+            source_timezone=_optional_text(payload.get("source_timezone")),
+            location=_optional_text(payload.get("location")),
+            meeting_url=_optional_text(payload.get("meeting_url")),
+            status=TaskStatus.CONFIRMED,
+        )
+        self._session.add(task)
+        application = self._owned_application(review_task.application_id)
+        application.interview_result = InterviewResult.PENDING
+        application.status = ApplicationStatus.ACTIVE
+        self._session.flush()
+        return task
 
     def _existing_response(self, task: ReviewTask) -> ReviewDecisionResponse:
         execution = self._session.scalar(
@@ -856,7 +1117,11 @@ class ReviewTaskService:
             return
         if follow_up is not None:
             workflow.status = WorkflowRunStatus.WAITING_REVIEW
-            workflow.current_node = "stage_review"
+            workflow.current_node = (
+                "task_review"
+                if follow_up.action_type is ReviewActionType.CREATE_TASK
+                else "stage_review"
+            )
             workflow.pending_review_task_id = follow_up.id
             return
         workflow.pending_review_task_id = None
@@ -870,6 +1135,71 @@ class ReviewTaskService:
             else WorkflowRunStatus.CANCELLED
         )
         workflow.finished_at = _utc_now()
+
+
+_CHINESE_ROUND_VALUES = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
+def _parse_interview_round(text: str) -> int | None:
+    if re.search(r"(?:初面|首面|首轮面试|第一轮面试)", text, re.IGNORECASE):
+        return 1
+    match = re.search(
+        r"(?:第\s*)?(?P<round>\d{1,2}|[一二三四五六七八九十])\s*(?:轮\s*)?面",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    raw_value = match.group("round")
+    value = int(raw_value) if raw_value.isdigit() else _CHINESE_ROUND_VALUES[raw_value]
+    return value if 1 <= value <= 20 else None
+
+
+def _interview_round_label(round_value: int) -> str:
+    chinese = next(
+        (label for label, value in _CHINESE_ROUND_VALUES.items() if value == round_value),
+        None,
+    )
+    return f"{chinese}面" if chinese else f"第 {round_value} 轮面试"
+
+
+def _extracted_value(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    return _optional_text(payload.get("value"))
+
+
+def _optional_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _review_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, (str, datetime)):
+        raise ResourceConflictError("日程时间格式无效")
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(value.replace("Z", "+00:00"))
+        )
+    except ValueError as exc:
+        raise ResourceConflictError("日程时间格式无效") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ResourceConflictError("日程时间必须包含时区")
+    return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
 def _score_candidate(
@@ -926,6 +1256,39 @@ def _score_candidate(
         ),
         match_reasons=reasons,
     )
+
+
+def _is_candidate_eligible(
+    email: Email,
+    analysis: EmailAnalysis,
+    application: JobApplication,
+    candidate: ApplicationCandidate,
+) -> bool:
+    if candidate.deterministic_score < 0.15:
+        return False
+    explicit_company_conflict = bool(
+        analysis.company_name
+        and application.company_name
+        and candidate.score_breakdown.company == 0
+    )
+    # 同一测试发件人或招聘代理可能联系多家公司，历史发件人关联不能覆盖明确的公司冲突。
+    if explicit_company_conflict and email.application_id != application.id:
+        return False
+    return True
+
+
+def _application_review_action(
+    suggestion: ApplicationAgentOutput,
+    candidates: list[ApplicationCandidate],
+) -> ReviewActionType:
+    if suggestion.recommendation is ApplicationRecommendation.CREATE_NEW:
+        return ReviewActionType.CREATE_APPLICATION
+    if (
+        suggestion.recommendation is ApplicationRecommendation.NEEDS_CONFIRMATION
+        and not candidates
+    ):
+        return ReviewActionType.CREATE_APPLICATION
+    return ReviewActionType.LINK_APPLICATION
 
 
 def _text_score(source: str | None, *targets: str | None) -> float:
@@ -989,3 +1352,19 @@ def _application_stage(value: Any) -> ApplicationStage:
         return ApplicationStage(value)
     except (TypeError, ValueError) as exc:
         raise ResourceConflictError("审核载荷中的 proposed_stage 无效") from exc
+
+
+def _interview_result(value: Any) -> InterviewResult | None:
+    if value is None:
+        return None
+    try:
+        return InterviewResult(value)
+    except (TypeError, ValueError) as exc:
+        raise ResourceConflictError("审核载荷中的 interview_result 无效") from exc
+
+
+def _extracted_interview_result(extraction: dict[str, Any]) -> str | None:
+    payload = extraction.get("interview_result")
+    if not isinstance(payload, dict) or not payload.get("value"):
+        return None
+    return _interview_result(payload["value"]).value

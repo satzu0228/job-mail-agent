@@ -56,6 +56,8 @@ async function loadPendingCount() {
   } catch {
     pendingCount.value = 0
     reminderCount.value = 0
+  } finally {
+    window.dispatchEvent(new Event('job-mail:data-poll'))
   }
 }
 

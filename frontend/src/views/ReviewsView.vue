@@ -13,6 +13,7 @@ import {
   riskMeta,
 } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
+import { visibleReviewPayloadEntries } from '@/utils/reviewPayload'
 import type { EmailListItem, ReviewTask } from '@/types/api'
 
 type ReviewFilter = 'pending' | 'processed'
@@ -29,6 +30,8 @@ const deciding = ref(false)
 const drawerVisible = ref(false)
 const selected = ref<ReviewTask | null>(null)
 const payloadText = ref('')
+const replyBody = ref('')
+const selectedApplicationId = ref<number | null>(null)
 const decisionReason = ref('')
 
 const filteredTasks = computed(() => {
@@ -93,9 +96,44 @@ async function loadData() {
 function openTask(task: ReviewTask, updateRoute = true) {
   selected.value = task
   payloadText.value = JSON.stringify(task.reviewed_payload ?? task.proposed_payload, null, 2)
+  const effectivePayload = task.reviewed_payload ?? task.proposed_payload
+  replyBody.value = String(
+    effectivePayload.body ??
+      effectivePayload.reviewed_body ??
+      effectivePayload.generated_body ??
+      '',
+  )
+  selectedApplicationId.value =
+    typeof effectivePayload.application_id === 'number'
+      ? effectivePayload.application_id
+      : null
   decisionReason.value = task.decision_reason ?? ''
   drawerVisible.value = true
   if (updateRoute) void router.replace(`/reviews/${task.id}`)
+}
+
+function applicationCandidates(task: ReviewTask): Array<{
+  application_id: number
+  company_name: string
+  position_name: string
+  current_stage: string
+}> {
+  const value = task.proposed_payload.candidates
+  if (!Array.isArray(value)) return []
+  return value.filter(
+    (item): item is {
+      application_id: number
+      company_name: string
+      position_name: string
+      current_stage: string
+    } =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof item.application_id === 'number' &&
+      typeof item.company_name === 'string' &&
+      typeof item.position_name === 'string' &&
+      typeof item.current_stage === 'string',
+  )
 }
 
 function closeDrawer() {
@@ -118,8 +156,24 @@ function parsePayload(): Record<string, unknown> | null {
 
 async function approve() {
   if (!selected.value || selected.value.status !== 'PENDING') return
-  const payload = parsePayload()
-  if (!payload) return
+  let payload: Record<string, unknown> | null
+  if (selected.value.action_type === 'SEND_REPLY') {
+    if (!replyBody.value.trim()) {
+      ElMessage.warning('回复正文不能为空')
+      return
+    }
+    payload = { body: replyBody.value.trim() }
+  } else {
+    payload = parsePayload()
+    if (!payload) return
+    if (selected.value.action_type === 'LINK_APPLICATION') {
+      if (!selectedApplicationId.value) {
+        ElMessage.warning('请选择要关联的求职申请')
+        return
+      }
+      payload.application_id = selectedApplicationId.value
+    }
+  }
 
   if (selected.value.action_type === 'SEND_REPLY') {
     try {
@@ -128,6 +182,27 @@ async function approve() {
         '确认发送回复',
         {
           confirmButtonText: '确认并发送',
+          cancelButtonText: '返回检查',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+  }
+  if (
+    selected.value.action_type === 'ARCHIVE_EMAIL' ||
+    selected.value.action_type === 'RESTORE_EMAIL'
+  ) {
+    const restoring = selected.value.action_type === 'RESTORE_EMAIL'
+    try {
+      await ElMessageBox.confirm(
+        restoring
+          ? '批准后系统将通过 IMAP 把邮件移回原文件夹。若服务器返回结果不明确，系统不会自动重试。'
+          : '批准后系统将通过 IMAP 把邮件移入系统归档文件夹。若服务器返回结果不明确，系统不会自动重试。',
+        restoring ? '确认恢复邮件' : '确认归档邮件',
+        {
+          confirmButtonText: restoring ? '确认并恢复' : '确认并归档',
           cancelButtonText: '返回检查',
           type: 'warning',
         },
@@ -164,6 +239,10 @@ async function decide(approveDecision: boolean, payload: Record<string, unknown>
       approveDecision
         ? selected.value.action_type === 'SEND_REPLY'
           ? '回复已确认发送'
+          : selected.value.action_type === 'ARCHIVE_EMAIL'
+            ? '邮件已归档'
+            : selected.value.action_type === 'RESTORE_EMAIL'
+              ? '邮件已恢复'
           : '审核已批准'
         : '审核已拒绝',
     )
@@ -194,7 +273,6 @@ function payloadSummary(task: ReviewTask): string {
     typeof payload.proposed_stage === 'string'
       ? enumValueLabel(payload.proposed_stage)
       : payload.proposed_stage,
-    payload.application_id,
   ].filter((value) => value !== null && value !== undefined && String(value).trim())
   return values.length ? values.slice(0, 2).join(' · ') : '查看建议内容'
 }
@@ -205,6 +283,7 @@ function fieldLabel(key: string): string {
     position_name: '岗位',
     application_id: '申请记录',
     proposed_stage: '建议阶段',
+    interview_result: '面试结果',
     current_stage: '当前阶段',
     title: '标题',
     subject: '邮件主题',
@@ -224,6 +303,7 @@ function fieldLabel(key: string): string {
     source_email_id: '来源邮件',
     workflow_run_id: '工作流编号',
     task_type: '日程类型',
+    interview_round: '面试轮次',
     raw_time_text: '原始时间',
     source_timezone: '来源时区',
     contact_name: '联系人',
@@ -231,6 +311,10 @@ function fieldLabel(key: string): string {
     description: '说明',
     body: '正文',
     cc_recipients: '抄送人',
+    summary: '邮件摘要',
+    stage_validation: '阶段校验',
+    source_folder: '当前文件夹',
+    target_folder: '目标文件夹',
   }
   return labels[key] ?? '其他信息'
 }
@@ -257,8 +341,15 @@ function displayValue(value: unknown, key = ''): string {
       .join('\n')
   }
   if (typeof value === 'string') {
+    if (key === 'interview_result') {
+      return value === 'PASSED' ? '已通过' : value === 'FAILED' ? '未通过' : '待确认'
+    }
     if (key.endsWith('_stage') || key === 'status') return enumValueLabel(value)
     if (key.endsWith('_at')) return formatDateTime(value)
+  }
+  if (key === 'interview_round' && typeof value === 'number') {
+    const numerals = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+    return value <= numerals.length ? `${numerals[value - 1]}面` : `第 ${value} 轮面试`
   }
   return String(value)
 }
@@ -410,18 +501,67 @@ onMounted(loadData)
 
         <section class="review-section">
           <h3>建议内容</h3>
+          <div
+            v-if="
+              selected.action_type === 'LINK_APPLICATION' &&
+              selected.status === 'PENDING'
+            "
+            class="application-selector"
+          >
+            <label for="application-candidate">关联到</label>
+            <ElSelect
+              id="application-candidate"
+              v-model="selectedApplicationId"
+              placeholder="请选择公司和岗位"
+              aria-label="关联求职申请"
+            >
+              <ElOption
+                v-for="candidate in applicationCandidates(selected)"
+                :key="candidate.application_id"
+                :label="`${candidate.company_name} · ${candidate.position_name}（${enumValueLabel(candidate.current_stage)}）`"
+                :value="candidate.application_id"
+              />
+            </ElSelect>
+          </div>
           <dl class="payload-list">
-            <div v-for="(value, key) in selected.proposed_payload" :key="key">
-              <dt>{{ fieldLabel(String(key)) }}</dt>
-              <dd>{{ displayValue(value, String(key)) }}</dd>
+            <div
+              v-for="[key, value] in visibleReviewPayloadEntries(selected)"
+              :key="key"
+            >
+              <dt>{{ fieldLabel(key) }}</dt>
+              <dd>
+                <ElInput
+                  v-if="
+                    selected.action_type === 'SEND_REPLY' &&
+                    selected.status === 'PENDING' &&
+                    ['body', 'generated_body', 'reviewed_body'].includes(key)
+                  "
+                  v-model="replyBody"
+                  type="textarea"
+                  :rows="9"
+                  resize="none"
+                  class="reply-body-editor"
+                  aria-label="回复正文"
+                />
+                <template v-else>{{ displayValue(value, key) }}</template>
+              </dd>
             </div>
           </dl>
         </section>
 
         <section v-if="selected.status === 'PENDING'" class="review-section">
           <h3>确认内容</h3>
-          <p class="section-hint">需要调整建议时，可展开高级编辑并修改结构化内容。</p>
-          <ElCollapse class="advanced-editor">
+          <p class="section-hint">
+            {{
+              selected.action_type === 'SEND_REPLY'
+                ? '如需调整回复，可直接在上方正文框中编辑；主题和收件人保持只读。'
+                : '需要调整建议时，可展开高级编辑并修改结构化内容。'
+            }}
+          </p>
+          <ElCollapse
+            v-if="selected.action_type !== 'SEND_REPLY'"
+            class="advanced-editor"
+          >
             <ElCollapseItem title="高级编辑结构化内容" name="payload">
               <p class="section-hint">字段属于系统接口约定，修改后必须保持有效格式。</p>
               <ElInput
@@ -658,15 +798,27 @@ onMounted(loadData)
   overflow: hidden;
 }
 
-.payload-list div,
-.result-list div {
+.application-selector {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.application-selector label {
+  color: var(--jm-text-secondary);
+  font-size: 12px;
+}
+
+.payload-list > div,
+.result-list > div {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr);
   border-bottom: 1px solid var(--jm-border-light);
 }
 
-.payload-list div:last-child,
-.result-list div:last-child {
+.payload-list > div:last-child,
+.result-list > div:last-child {
   border-bottom: 0;
 }
 
@@ -693,6 +845,29 @@ onMounted(loadData)
 .result-list dd {
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.reply-body-editor {
+  display: block;
+  width: 100%;
+}
+
+.reply-body-editor :deep(textarea) {
+  min-height: 190px !important;
+  padding: 0;
+  color: var(--jm-text-primary);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.7;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.reply-body-editor :deep(textarea:hover),
+.reply-body-editor :deep(textarea:focus) {
+  box-shadow: none;
 }
 
 .advanced-editor {

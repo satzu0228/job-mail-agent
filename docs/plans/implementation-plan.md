@@ -758,6 +758,10 @@ Gmail 首版只支持应用专用密码方式，并在界面提示其账户需�
 
 测试不能等到第十一阶段才开始。每个阶段都应同步增加单元测试、集成测试或脱敏 Fixture；本阶段负责补齐端到端、异常、安全、性能和回归测试。
 
+本阶段的可执行环境、用例矩阵、Playwright 场景、性能目标和退出标准统一见
+[`phase-11-system-test-plan.md`](phase-11-system-test-plan.md)。计划已完成编写，测试执行
+尚未开始；后续结果集中记录到 `docs/phase-11/system-test-progress.md`。
+
 #### 功能测试
 
 - 邮箱连接

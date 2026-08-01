@@ -6,6 +6,8 @@ from app.domain.enums import TransportSecurity
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.email.client import (
     ImapMailboxClient,
+    ImapMoveResult,
+    ImapMoveUnknownError,
     SmtpDeliveryUnknownError,
     SmtpMailer,
 )
@@ -13,9 +15,15 @@ from app.infrastructure.email.client import (
 
 class FakeImap:
     def __init__(self) -> None:
+        self.capabilities = (b"IMAP4REV1", b"MOVE")
         self.readonly = False
         self.fetch_queries: list[tuple[str, str]] = []
         self.client_identified = False
+        self.created_folders: list[str] = []
+        self.moved = False
+        self.copied = False
+        self.deleted = False
+        self.expunged = False
 
     def login(self, email_address: str, credential: str) -> tuple[str, list[bytes]]:
         return "OK", [b"logged in"]
@@ -29,7 +37,13 @@ class FakeImap:
         return "OK", [b"3"]
 
     def response(self, name: str) -> tuple[str, list[bytes]]:
+        if name == "COPYUID" and (self.moved or self.copied):
+            return "COPYUID", [b"84 2 99"]
         return "UIDVALIDITY", [b"42"]
+
+    def create(self, folder: str) -> tuple[str, list[bytes]]:
+        self.created_folders.append(folder)
+        return "OK", [b"created"]
 
     def _simple_command(
         self,
@@ -46,6 +60,22 @@ class FakeImap:
         command: str,
         *args: str | None,
     ) -> tuple[str, list[bytes | tuple[bytes, bytes]]]:
+        if command == "MOVE":
+            assert args == ("2", "JobMailArchive")
+            self.moved = True
+            return "OK", [b"moved"]
+        if command == "COPY":
+            assert args == ("2", "JobMailArchive")
+            self.copied = True
+            return "OK", [b"copied"]
+        if command == "STORE":
+            assert args == ("2", "+FLAGS.SILENT", r"(\Deleted)")
+            self.deleted = True
+            return "OK", [b"stored"]
+        if command == "EXPUNGE":
+            assert args == ("2",)
+            self.expunged = True
+            return "OK", [b"expunged"]
         if command == "search":
             return "OK", [b"1 2 3"]
         uid, query = str(args[0]), str(args[1])
@@ -115,6 +145,67 @@ def test_fetch_raw_message_uses_read_only_folder_and_size_limit() -> None:
     assert raw_message.startswith(b"Subject: Test")
     assert ("2", "(RFC822.SIZE)") in fake.fetch_queries
     assert ("2", "(BODY.PEEK[] INTERNALDATE)") in fake.fetch_queries
+
+
+def test_imap_move_requires_copyuid_and_returns_current_pointer() -> None:
+    fake = FakeImap()
+    client = ImapMailboxClient(timeout_seconds=5)
+    client._connect = lambda account: fake  # type: ignore[method-assign]
+
+    result = client.move(
+        _account(),
+        "secret-not-logged",
+        source_folder="INBOX",
+        source_uid=2,
+        target_folder="JobMailArchive",
+        create_target=True,
+    )
+
+    assert fake.readonly is False
+    assert fake.created_folders == ["JobMailArchive"]
+    assert result.folder == "JobMailArchive"
+    assert result.uid_validity == 84
+    assert result.uid == 99
+
+
+def test_imap_move_without_copyuid_is_unknown_and_not_retried() -> None:
+    fake = FakeImap()
+    fake.response = lambda name: ("COPYUID", [])  # type: ignore[method-assign]
+    client = ImapMailboxClient(timeout_seconds=5)
+    client._connect = lambda account: fake  # type: ignore[method-assign]
+
+    with pytest.raises(ImapMoveUnknownError):
+        client.move(
+            _account(),
+            "secret-not-logged",
+            source_folder="INBOX",
+            source_uid=2,
+            target_folder="JobMailArchive",
+            create_target=True,
+        )
+
+
+def test_uidplus_fallback_checkpoints_copy_before_deleting_source() -> None:
+    fake = FakeImap()
+    fake.capabilities = (b"IMAP4REV1", b"UIDPLUS")
+    checkpoints: list[ImapMoveResult] = []
+    client = ImapMailboxClient(timeout_seconds=5)
+    client._connect = lambda account: fake  # type: ignore[method-assign]
+
+    result = client.move(
+        _account(),
+        "secret-not-logged",
+        source_folder="INBOX",
+        source_uid=2,
+        target_folder="JobMailArchive",
+        create_target=True,
+        on_copy=checkpoints.append,
+    )
+
+    assert checkpoints == [result]
+    assert fake.copied is True
+    assert fake.deleted is True
+    assert fake.expunged is True
 
 
 class FakeSmtp:

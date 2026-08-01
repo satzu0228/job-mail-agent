@@ -1,7 +1,7 @@
 # Backend
 
 正式系统的 FastAPI 后端。当前已建立应用入口、版本化路由、配置、SQLAlchemy
-Session、Alembic 环境和基础测试，并完成 13 张业务表与四批迁移。邮件查询、
+Session、Alembic 环境和基础测试，并完成 13 张业务表与六批迁移。邮件查询、
 求职记录、任务和回复草稿基础 API 已建立；关键申请阶段、草稿批准和外部动作仍
 必须通过后续审核流程，普通 PATCH 不提供绕过入口。Classification 与 Extraction
 的版本化 Pydantic Schema、Prompt、正式 Agent 和 DeepSeek 模型适配已经建立。
@@ -13,7 +13,8 @@ Session、Alembic 环境和基础测试，并完成 13 张业务表与四批迁�
 LangGraph 强类型工作流、Validation Node、SQLite checkpoint、申请处理的两段人工
 中断恢复、运行轨迹以及工作流启动和查询 API。第八阶段已增加 Reply Agent、确定性邮件
 Formatter、草稿高风险审核、第三段可恢复中断和 SMTP 幂等 Executor；Agent 与
-LangGraph 均不能直接发送邮件。
+LangGraph 均不能直接发送邮件。第十一阶段已增加需人工审核的邮件归档与恢复，
+并通过 MOVE 或带 COPYUID 检查点的 UIDPLUS Executor 执行。
 
 数据库字段和迁移顺序以
 [`../docs/database/database-er-design.md`](../docs/database/database-er-design.md) 为准。
@@ -28,6 +29,9 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload
 ```
 
+修改 `.env`（尤其是 checkpoint AES 密钥、邮箱授权码或模型凭据）后必须重启
+FastAPI 进程；运行中的进程会缓存已加载配置，浏览器刷新不会重新载入环境变量。
+
 打开：
 
 - API 文档：<http://127.0.0.1:8000/docs>
@@ -39,6 +43,8 @@ uvicorn app.main:app --reload
 - 统一分析：`POST /api/v1/emails/{id}/analyze`
 - 申请匹配：`POST /api/v1/emails/{id}/match-application`
 - 启动工作流：`POST /api/v1/emails/{id}/workflow-runs`
+- 发起归档审核：`POST /api/v1/emails/{id}/archive-review`
+- 发起恢复审核：`POST /api/v1/emails/{id}/restore-review`
 - 查询工作流：`GET /api/v1/workflow-runs/{run_id}`
 - 求职记录：<http://127.0.0.1:8000/api/v1/job-applications>
 - 审核任务：<http://127.0.0.1:8000/api/v1/review-tasks>
@@ -82,5 +88,10 @@ MySQL 数据库并在 `.env` 中设置 `JOB_MAIL_DATABASE_URL`。
 
 ```powershell
 python -m pytest
-python -m ruff check .
+python -m pytest --cov=app --cov-report=term-missing
+python -m ruff check app tests
+python tests/performance/benchmark_query_api.py
 ```
+
+性能脚本只使用固定的隔离测试用户，装载 1,000 封邮件、100 条申请和 1,000 条事件，
+结束时按外键顺序清理本次 Fixture；若发现同 ID 用户已存在会拒绝执行。
