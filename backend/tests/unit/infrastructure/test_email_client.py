@@ -102,7 +102,7 @@ def _account() -> EmailAccount:
         smtp_host="smtp.example.com",
         smtp_port=465,
         smtp_security=TransportSecurity.SSL,
-        credential_ref="JOB_MAIL_EMAIL_CREDENTIAL_TEST",
+        credential_ciphertext="v1:email-client-test",
     )
 
 

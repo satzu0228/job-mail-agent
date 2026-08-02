@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     field_serializer,
     field_validator,
     model_validator,
@@ -68,11 +69,7 @@ class EmailAccountCreate(ApiSchema):
     smtp_host: str = Field(min_length=1, max_length=255)
     smtp_port: int = Field(gt=0, le=65535)
     smtp_security: TransportSecurity
-    credential_ref: str = Field(
-        min_length=3,
-        max_length=128,
-        pattern=r"^[A-Z][A-Z0-9_]+$",
-    )
+    authorization_code: SecretStr = Field(min_length=6, max_length=256)
     is_active: bool = True
 
     @field_validator("provider", "imap_host", "smtp_host", mode="before")
@@ -101,6 +98,7 @@ class EmailAccountRead(UtcResponseSchema):
     smtp_host: str
     smtp_port: int
     smtp_security: TransportSecurity
+    credential_configured: bool
     is_active: bool
     auto_sync_enabled: bool
     sync_interval_minutes: int
@@ -117,6 +115,10 @@ class EmailAccountRead(UtcResponseSchema):
 
 class EmailAccountActiveUpdate(ApiSchema):
     is_active: bool
+
+
+class EmailAccountAuthorizationUpdate(ApiSchema):
+    authorization_code: SecretStr = Field(min_length=6, max_length=256)
 
 
 class EmailAccountSyncSettingsUpdate(ApiSchema):

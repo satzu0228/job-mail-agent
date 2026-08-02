@@ -13,7 +13,7 @@ function form(): EmailAccountCreate {
     smtp_host: 'old.example.com',
     smtp_port: 587,
     smtp_security: 'STARTTLS',
-    credential_ref: 'JOB_MAIL_EMAIL_AUTH_CODE',
+    authorization_code: 'authorization-code',
     is_active: true,
   }
 }

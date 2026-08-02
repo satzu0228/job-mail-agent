@@ -21,6 +21,7 @@ from app.application.schemas import (
     AutomationRuleRead,
     AutomationRuleUpdate,
     EmailAccountActiveUpdate,
+    EmailAccountAuthorizationUpdate,
     EmailAccountCreate,
     EmailAccountRead,
     EmailAccountSyncSettingsUpdate,
@@ -124,6 +125,7 @@ def _account_read(account: EmailAccount) -> EmailAccountRead:
         smtp_host=account.smtp_host,
         smtp_port=account.smtp_port,
         smtp_security=account.smtp_security,
+        credential_configured=bool(account.credential_ciphertext),
         is_active=account.is_active,
         auto_sync_enabled=bool(account.auto_sync_enabled),
         sync_interval_minutes=account.sync_interval_minutes or 10,
@@ -161,6 +163,24 @@ def create_email_account(
     use_case: EmailAccessDependency,
 ) -> EmailAccountRead:
     return _account_read(use_case.create_account(payload))
+
+
+@router.patch(
+    "/email-accounts/{account_id}/authorization-code",
+    response_model=EmailAccountRead,
+    tags=["email-accounts"],
+)
+def update_email_account_authorization_code(
+    account_id: int,
+    payload: EmailAccountAuthorizationUpdate,
+    use_case: EmailAccessDependency,
+) -> EmailAccountRead:
+    return _account_read(
+        use_case.update_authorization_code(
+            account_id,
+            authorization_code=payload.authorization_code,
+        )
+    )
 
 
 @router.patch(

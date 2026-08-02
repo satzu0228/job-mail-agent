@@ -27,8 +27,8 @@ class FakeRepository:
 
 
 class FakeCredentialResolver:
-    def resolve(self, credential_ref: str) -> str:
-        assert credential_ref == "MAIL_TOKEN"
+    def resolve(self, credential_ciphertext: str | None) -> str:
+        assert credential_ciphertext == "v1:mail-token"
         return "secret"
 
 
@@ -72,7 +72,7 @@ def test_refresh_content_reparses_safe_image_metadata_without_creating_email() -
         smtp_host="smtp.example.com",
         smtp_port=465,
         smtp_security=TransportSecurity.SSL,
-        credential_ref="MAIL_TOKEN",
+        credential_ciphertext="v1:mail-token",
         is_active=True,
     )
     email = Email(

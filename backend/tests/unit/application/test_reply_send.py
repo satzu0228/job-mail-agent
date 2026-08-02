@@ -36,8 +36,8 @@ class FakeMailer:
 
 
 class FakeCredentialResolver:
-    def resolve(self, credential_ref: str) -> str:
-        assert credential_ref == "JOB_MAIL_EMAIL_CREDENTIAL_TEST"
+    def resolve(self, credential_ciphertext: str | None) -> str:
+        assert credential_ciphertext == "v1:reply-test"
         return "secret"
 
 
@@ -45,7 +45,7 @@ def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     account = SimpleNamespace(
         id=1,
         email_address="candidate@example.com",
-        credential_ref="JOB_MAIL_EMAIL_CREDENTIAL_TEST",
+        credential_ciphertext="v1:reply-test",
         smtp_security=TransportSecurity.SSL,
     )
     email = SimpleNamespace(

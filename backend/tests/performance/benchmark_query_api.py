@@ -64,7 +64,7 @@ def seed() -> tuple[int, int]:
             smtp_host="smtp.example.test",
             smtp_port=465,
             smtp_security=TransportSecurity.SSL,
-            credential_ref="JOB_MAIL_PHASE11_PERFORMANCE_FIXTURE",
+            credential_ciphertext="v1:performance-fixture",
             is_active=False,
         )
         session.add(account)

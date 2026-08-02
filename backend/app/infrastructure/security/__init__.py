@@ -2,7 +2,7 @@
 
 from app.infrastructure.security.credentials import (
     CredentialNotConfiguredError,
-    EnvironmentCredentialResolver,
+    EncryptedCredentialResolver,
 )
 
-__all__ = ["CredentialNotConfiguredError", "EnvironmentCredentialResolver"]
+__all__ = ["CredentialNotConfiguredError", "EncryptedCredentialResolver"]

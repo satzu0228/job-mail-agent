@@ -428,7 +428,10 @@ ReviewTask(PENDING)
 
 ### 敏感数据
 
-- MVP 邮箱授权码只通过 `credential_ref` 从环境变量或密钥配置读取，不写入数据库。
+- 用户在邮箱设置页直接填写授权码，不接触后端环境变量名。
+- 邮箱授权码使用独立的服务端 AES-GCM 密钥加密后写入 `credential_ciphertext`；API
+  不返回授权码明文或密文，邮件操作执行时才在内存中解密。
+- 加密密钥只从部署环境读取，不写入数据库；密钥丢失或轮换未迁移时，账户必须重新授权。
 - 模型 API Key 不入库。
 - HTML、链接和附件均按不可信输入处理。
 - 发给模型的正文按任务裁剪，默认不发送不需要的历史引用和附件。
@@ -458,7 +461,7 @@ ReviewTask(PENDING)
 - 163 IMAP/SMTP Provider；
 - LLMProvider 结构化输出；
 - SQLite checkpoint 暂停、进程重启和恢复；
-- `credential_ref` 安全配置读取。
+- 授权码加密、错误密钥拒绝解密、API 不回显和重新授权。
 
 ### 工作流测试
 

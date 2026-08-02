@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from app.api.v1.endpoints.application_management import review_service
 from app.api.v1.endpoints.business import email_access_service, service
@@ -42,9 +43,8 @@ class StubReviewService:
 
 
 class StubEmailAccessService:
-    def set_account_active(self, account_id: int, *, is_active: bool) -> EmailAccount:
-        assert account_id == 3
-        assert is_active is True
+    @staticmethod
+    def _account() -> EmailAccount:
         now = datetime(2026, 7, 29, 12, 0)
         return EmailAccount(
             id=3,
@@ -57,11 +57,26 @@ class StubEmailAccessService:
             smtp_host="smtp.gmail.com",
             smtp_port=465,
             smtp_security=TransportSecurity.SSL,
-            credential_ref="JOB_MAIL_GMAIL_AUTH_CODE",
+            credential_ciphertext="v1:gmail-fixture",
             is_active=True,
             created_at=now,
             updated_at=now,
         )
+
+    def set_account_active(self, account_id: int, *, is_active: bool) -> EmailAccount:
+        assert account_id == 3
+        assert is_active is True
+        return self._account()
+
+    def update_authorization_code(
+        self,
+        account_id: int,
+        *,
+        authorization_code: SecretStr,
+    ) -> EmailAccount:
+        assert account_id == 3
+        assert authorization_code.get_secret_value() == "new-app-password"
+        return self._account()
 
     def download_attachment(
         self,
@@ -108,6 +123,10 @@ def test_account_activation_and_attachment_download_routes(
             "/api/v1/email-accounts/3/active",
             json={"is_active": True},
         )
+        authorization = client.patch(
+            "/api/v1/email-accounts/3/authorization-code",
+            json={"authorization_code": "new-app-password"},
+        )
         attachment = client.get("/api/v1/emails/8/attachments/0")
     finally:
         app.dependency_overrides.pop(email_access_service, None)
@@ -116,6 +135,10 @@ def test_account_activation_and_attachment_download_routes(
     assert activation.json()["is_active"] is True
     assert activation.json()["email_address"] == "candidate@gmail.com"
     assert activation.json()["email_address_masked"] == "c***@gmail.com"
+    assert authorization.status_code == 200
+    assert authorization.json()["credential_configured"] is True
+    assert "authorization_code" not in authorization.text
+    assert "credential_ciphertext" not in authorization.text
     assert attachment.status_code == 200
     assert attachment.content == b"%PDF-test"
     assert attachment.headers["x-content-type-options"] == "nosniff"

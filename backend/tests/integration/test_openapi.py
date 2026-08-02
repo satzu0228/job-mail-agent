@@ -13,6 +13,7 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/email-accounts/{account_id}/test-connection",
         "/api/v1/email-accounts/{account_id}/sync",
         "/api/v1/email-accounts/{account_id}/active",
+        "/api/v1/email-accounts/{account_id}/authorization-code",
         "/api/v1/emails",
         "/api/v1/emails/query",
         "/api/v1/emails/{email_id}",
@@ -63,5 +64,11 @@ def test_basic_api_does_not_expose_critical_state_or_send_actions(
     assert send_paths == {"/api/v1/reply-drafts/{draft_id}/send"}
     account_read = components["EmailAccountRead"]["properties"]
     assert "credential_ref" not in account_read
+    assert "credential_ciphertext" not in account_read
+    assert "authorization_code" not in account_read
+    assert "credential_configured" in account_read
+    account_create = components["EmailAccountCreate"]["properties"]
+    assert "authorization_code" in account_create
+    assert account_create["authorization_code"]["format"] == "password"
     assert "email_address" in account_read
     assert "email_address_masked" in account_read

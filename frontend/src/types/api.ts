@@ -63,6 +63,7 @@ export interface EmailAccount {
   smtp_host: string
   smtp_port: number
   smtp_security: TransportSecurity
+  credential_configured: boolean
   is_active: boolean
   auto_sync_enabled: boolean
   sync_interval_minutes: number
@@ -86,7 +87,7 @@ export interface EmailAccountCreate {
   smtp_host: string
   smtp_port: number
   smtp_security: TransportSecurity
-  credential_ref: string
+  authorization_code: string
   is_active: boolean
 }
 

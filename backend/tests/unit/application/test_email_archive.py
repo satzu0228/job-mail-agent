@@ -27,8 +27,8 @@ class FakeSession:
 
 
 class FakeCredentialResolver:
-    def resolve(self, credential_ref: str) -> str:
-        assert credential_ref == "JOB_MAIL_ARCHIVE_TEST"
+    def resolve(self, credential_ciphertext: str | None) -> str:
+        assert credential_ciphertext == "v1:archive-test"
         return "secret"
 
 
@@ -56,7 +56,7 @@ class FakeMover:
 
 
 def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
-    account = SimpleNamespace(credential_ref="JOB_MAIL_ARCHIVE_TEST")
+    account = SimpleNamespace(credential_ciphertext="v1:archive-test")
     email = SimpleNamespace(
         id=8,
         account=account,

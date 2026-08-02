@@ -243,7 +243,7 @@ async function syncAccount() {
     for (let i = 0; i < newIds.length; i++) {
       batchProgress.value = `正在智能处理 (${i + 1}/${newIds.length})...`
       try {
-        await emailApi.startWorkflow(newIds[i])
+        await emailApi.startWorkflow(newIds[i]!)
         successCount++
       } catch (error) {
         console.error(`Email ${newIds[i]} workflow failed:`, error)

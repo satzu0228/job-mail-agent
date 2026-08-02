@@ -42,7 +42,7 @@ class StubSecurityEmailAccess:
                         smtp_host="smtp.example.test",
                         smtp_port=465,
                         smtp_security=TransportSecurity.SSL,
-                        credential_ref="JOB_MAIL_DO_NOT_ECHO_THIS_REFERENCE",
+                        credential_ciphertext="v1:DO_NOT_ECHO_CIPHERTEXT",
                         is_active=True,
                         created_at=now,
                         updated_at=now,
@@ -64,7 +64,7 @@ class StubSecurityEmailAccess:
         )
 
 
-def test_account_read_does_not_echo_credential_reference_or_secret(
+def test_account_read_does_not_echo_credential_ciphertext_or_secret(
     client: TestClient,
 ) -> None:
     app.dependency_overrides[email_access_service] = StubSecurityEmailAccess
@@ -75,8 +75,8 @@ def test_account_read_does_not_echo_credential_reference_or_secret(
 
     assert response.status_code == 200
     body = response.text
-    assert "credential_ref" not in body
-    assert "JOB_MAIL_DO_NOT_ECHO_THIS_REFERENCE" not in body
+    assert "credential_ciphertext" not in body
+    assert "DO_NOT_ECHO_CIPHERTEXT" not in body
     assert "authorization" not in body.casefold()
 
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleCheck, CircleClose, Connection, Plus, Refresh } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Connection, Key, Link, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
@@ -35,6 +35,10 @@ const testVisible = ref(false)
 const testResult = ref<EmailConnectionTestResult | null>(null)
 const formRef = ref<FormInstance>()
 const advancedVisible = ref(false)
+const authorizationVisible = ref(false)
+const authorizationAccount = ref<EmailAccount | null>(null)
+const authorizationCode = ref('')
+const authorizationSaving = ref(false)
 
 const form = reactive<EmailAccountCreate>({
   provider: '163',
@@ -45,7 +49,7 @@ const form = reactive<EmailAccountCreate>({
   smtp_host: 'smtp.163.com',
   smtp_port: 465,
   smtp_security: 'SSL',
-  credential_ref: 'JOB_MAIL_EMAIL_AUTH_CODE',
+  authorization_code: '',
   is_active: true,
 })
 
@@ -56,13 +60,9 @@ const rules: FormRules = {
   ],
   imap_host: [{ required: true, message: '请输入 IMAP 主机', trigger: 'blur' }],
   smtp_host: [{ required: true, message: '请输入 SMTP 主机', trigger: 'blur' }],
-  credential_ref: [
-    { required: true, message: '请输入授权码环境变量名', trigger: 'blur' },
-    {
-      pattern: /^[A-Z][A-Z0-9_]+$/,
-      message: '仅支持大写字母、数字和下划线，且必须以字母开头',
-      trigger: 'blur',
-    },
+  authorization_code: [
+    { required: true, message: '请输入邮箱授权码', trigger: 'blur' },
+    { min: 6, message: '授权码至少需要 6 个字符', trigger: 'blur' },
   ],
 }
 
@@ -79,11 +79,41 @@ watch(
 
 function openCreateDialog() {
   form.email_address = ''
-  form.credential_ref = 'JOB_MAIL_EMAIL_AUTH_CODE'
+  form.authorization_code = ''
   form.is_active = !accounts.value.some((account) => account.is_active)
   applyMailProviderPreset(form, '163')
   advancedVisible.value = false
   createVisible.value = true
+}
+
+function openAuthorizationDialog(account: EmailAccount) {
+  authorizationAccount.value = account
+  authorizationCode.value = ''
+  authorizationVisible.value = true
+}
+
+async function updateAuthorizationCode() {
+  const account = authorizationAccount.value
+  if (!account || authorizationCode.value.length < 6) {
+    ElMessage.warning('请输入有效的邮箱授权码')
+    return
+  }
+  authorizationSaving.value = true
+  try {
+    const updatedAccount = await emailAccountApi.updateAuthorizationCode(
+      account.id,
+      authorizationCode.value,
+    )
+    ElMessage.success('授权码已更新，正在测试连接')
+    authorizationVisible.value = false
+    authorizationCode.value = ''
+    await loadAccounts()
+    await testConnection(updatedAccount)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    authorizationSaving.value = false
+  }
 }
 
 async function loadAccounts() {
@@ -174,10 +204,11 @@ async function createAccount() {
   if (!(await formRef.value?.validate())) return
   creating.value = true
   try {
-    await emailAccountApi.create(form)
-    ElMessage.success('邮箱账户已添加')
+    const account = await emailAccountApi.create(form)
+    ElMessage.success('邮箱账户已添加，正在测试连接')
     createVisible.value = false
     await loadAccounts()
+    await testConnection(account)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -290,6 +321,16 @@ onMounted(() => {
           </div>
         </div>
 
+        <div v-if="!account.credential_configured" class="reauthorize-banner">
+          <div>
+            <strong>需要重新授权</strong>
+            <span>原有凭据已失效，请填写该邮箱最新生成的授权码。</span>
+          </div>
+          <ElButton type="warning" plain :icon="Key" @click="openAuthorizationDialog(account)">
+            重新授权
+          </ElButton>
+        </div>
+
         <dl class="connection-grid">
           <div>
             <dt>收件服务器（IMAP）</dt>
@@ -339,7 +380,14 @@ onMounted(() => {
             </ElSelect>
           </div>
           <ElButton
+            :icon="Key"
+            @click="openAuthorizationDialog(account)"
+          >
+            更新授权码
+          </ElButton>
+          <ElButton
             :icon="Connection"
+            :disabled="!account.credential_configured"
             :loading="testingId === account.id"
             @click="testConnection(account)"
           >
@@ -360,7 +408,7 @@ onMounted(() => {
       <div v-if="!loading && accounts.length === 0" class="surface account-empty">
         <div class="empty-mail-mark">@</div>
         <h3>还没有邮箱账户</h3>
-        <p>添加 163、126、QQ、Gmail 或自定义邮箱，授权码从后端环境变量读取。</p>
+        <p>选择邮箱服务商，跟随指引获取授权码，再填写邮箱地址和授权码即可连接。</p>
         <ElButton type="primary" @click="openCreateDialog">添加邮箱</ElButton>
       </div>
     </section>
@@ -413,11 +461,11 @@ onMounted(() => {
     <aside class="security-note">
       <strong>凭据安全</strong>
       <p>
-        页面不会读取或显示邮箱授权码。请在后端环境变量中配置授权码，并只在这里填写对应的环境变量名称。
+        授权码提交给后端后会立即加密保存，页面和账户接口都不会再次显示它。发送邮件仍需人工审核。
       </p>
     </aside>
 
-    <ElDialog v-model="createVisible" title="添加邮箱账户" width="min(640px, 94vw)">
+    <ElDialog v-model="createVisible" title="添加邮箱账户" width="min(720px, 94vw)">
       <ElForm ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
           <ElFormItem label="邮箱服务商">
@@ -435,13 +483,28 @@ onMounted(() => {
           </ElFormItem>
         </div>
 
-        <ElAlert
-          v-if="selectedPreset.help"
-          class="provider-help"
-          type="warning"
-          :closable="false"
-          :title="selectedPreset.help"
-        />
+        <section class="authorization-guide">
+          <div class="guide-heading">
+            <div class="guide-key"><ElIcon><Key /></ElIcon></div>
+            <div>
+              <h4>{{ selectedPreset.authorizationTitle }}</h4>
+              <p>授权码是邮箱为第三方客户端生成的专用凭据，不是你的登录密码。</p>
+            </div>
+            <ElLink
+              v-if="selectedPreset.authorizationUrl"
+              :href="selectedPreset.authorizationUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              type="primary"
+            >
+              {{ selectedPreset.authorizationLinkLabel }}
+              <ElIcon><Link /></ElIcon>
+            </ElLink>
+          </div>
+          <ol>
+            <li v-for="step in selectedPreset.authorizationSteps" :key="step">{{ step }}</li>
+          </ol>
+        </section>
 
         <ElButton
           v-if="form.provider !== 'custom'"
@@ -491,9 +554,15 @@ onMounted(() => {
           </div>
         </template>
 
-        <ElFormItem label="授权码环境变量名" prop="credential_ref">
-          <ElInput v-model="form.credential_ref" />
-          <p class="field-hint">这里只保存变量名称，不保存授权码本身。</p>
+        <ElFormItem label="邮箱授权码" prop="authorization_code">
+          <ElInput
+            v-model="form.authorization_code"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="粘贴刚刚生成的授权码"
+          />
+          <p class="field-hint">{{ selectedPreset.authorizationHint }}</p>
         </ElFormItem>
         <ElFormItem>
           <ElCheckbox v-model="form.is_active">
@@ -503,7 +572,31 @@ onMounted(() => {
       </ElForm>
       <template #footer>
         <ElButton @click="createVisible = false">取消</ElButton>
-        <ElButton type="primary" :loading="creating" @click="createAccount">添加邮箱</ElButton>
+        <ElButton type="primary" :loading="creating" @click="createAccount">保存并测试连接</ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog v-model="authorizationVisible" title="更新邮箱授权码" width="min(520px, 92vw)">
+      <div v-if="authorizationAccount" class="reauthorize-dialog">
+        <p>
+          正在为 <strong>{{ authorizationAccount.email_address_masked }}</strong> 更新授权码。
+          原授权码不会显示，保存后将被新授权码替换。
+        </p>
+        <ElInput
+          v-model="authorizationCode"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          placeholder="粘贴新的邮箱授权码"
+          @keyup.enter="updateAuthorizationCode"
+        />
+        <span>{{ getMailProviderPreset(authorizationAccount.provider).authorizationHint }}</span>
+      </div>
+      <template #footer>
+        <ElButton @click="authorizationVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="authorizationSaving" @click="updateAuthorizationCode">
+          保存授权码
+        </ElButton>
       </template>
     </ElDialog>
 
@@ -607,6 +700,32 @@ onMounted(() => {
   align-items: center;
   margin-left: auto;
   color: var(--jm-text-secondary);
+  font-size: 11px;
+}
+
+.reauthorize-banner {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 12px 14px;
+  color: #8a5815;
+  background: #fff8e8;
+  border: 1px solid #f2d69b;
+  border-radius: 7px;
+}
+
+.reauthorize-banner > div {
+  display: grid;
+  gap: 3px;
+}
+
+.reauthorize-banner strong {
+  font-size: 12px;
+}
+
+.reauthorize-banner span {
   font-size: 11px;
 }
 
@@ -783,6 +902,82 @@ onMounted(() => {
   gap: 0 14px;
 }
 
+.authorization-guide {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #f3f7ff;
+  border: 1px solid #dce7fb;
+  border-radius: 9px;
+}
+
+.guide-heading {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+}
+
+.guide-key {
+  display: grid;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  color: var(--jm-primary);
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgb(36 91 219 / 12%);
+  place-items: center;
+}
+
+.guide-heading > div:nth-child(2) {
+  min-width: 0;
+  margin-right: auto;
+}
+
+.guide-heading h4 {
+  margin: 0 0 3px;
+  font-size: 13px;
+}
+
+.guide-heading p {
+  margin: 0;
+  color: var(--jm-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.guide-heading :deep(.el-link) {
+  flex: 0 0 auto;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.authorization-guide ol {
+  display: grid;
+  gap: 7px;
+  margin: 13px 0 0 43px;
+  padding: 0;
+  color: var(--jm-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.reauthorize-dialog {
+  display: grid;
+  gap: 10px;
+}
+
+.reauthorize-dialog p {
+  margin: 0;
+  color: var(--jm-text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.reauthorize-dialog span {
+  color: var(--jm-text-tertiary);
+  font-size: 11px;
+}
+
 .protocol-section {
   margin-bottom: 18px;
   padding: 14px;
@@ -894,6 +1089,16 @@ onMounted(() => {
   .form-grid,
   .protocol-grid {
     grid-template-columns: 1fr;
+  }
+
+  .reauthorize-banner,
+  .guide-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .authorization-guide ol {
+    margin-left: 20px;
   }
 
   .protocol-grid :deep(.el-form-item) {

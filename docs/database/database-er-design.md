@@ -125,7 +125,7 @@ MVP 不实现完整账号系统，只保留一个配置好的演示用户。
 | `smtp_host` | VARCHAR(255) |  |
 | `smtp_port` | SMALLINT UNSIGNED |  |
 | `smtp_security` | VARCHAR(16) | `SSL/STARTTLS` |
-| `credential_ref` | VARCHAR(128) | 环境变量或密钥引用，不存授权码 |
+| `credential_ciphertext` | TEXT | 可空，AES-GCM 加密后的授权码；API 不返回 |
 | `is_active` | BOOLEAN |  |
 | `auto_sync_enabled` | BOOLEAN | 是否参与定时同步 |
 | `sync_interval_minutes` | SMALLINT UNSIGNED | 5～60 分钟 |
@@ -142,7 +142,8 @@ MVP 不实现完整账号系统，只保留一个配置好的演示用户。
 约束：
 
 - UNIQUE(`user_id`, `email_address`)
-- 授权码只从 `credential_ref` 指向的安全配置读取
+- 授权码只保存 AES-GCM 密文；独立加密密钥由部署环境提供
+- 空密文表示账户需要重新授权，不能执行连接测试、同步或发送
 - Provider 差异封装在 IMAP/SMTP Adapter
 
 ### 5.3 `emails`

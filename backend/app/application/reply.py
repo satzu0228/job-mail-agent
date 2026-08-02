@@ -57,7 +57,7 @@ from app.infrastructure.email import (
     recipient,
     reply_subject,
 )
-from app.infrastructure.security import EnvironmentCredentialResolver
+from app.infrastructure.security import EncryptedCredentialResolver
 
 
 class ReplyRunner(Protocol):
@@ -67,7 +67,7 @@ class ReplyRunner(Protocol):
 
 
 class CredentialResolver(Protocol):
-    def resolve(self, credential_ref: str) -> str: ...
+    def resolve(self, credential_ciphertext: str | None) -> str: ...
 
 
 class Mailer(Protocol):
@@ -329,7 +329,7 @@ class ReplySendService:
     ) -> None:
         self._session = session
         self._user_id = user_id
-        self._credential_resolver = credential_resolver or EnvironmentCredentialResolver()
+        self._credential_resolver = credential_resolver or EncryptedCredentialResolver()
         self._mailer = mailer or SmtpMailer(timeout_seconds)
 
     def send(self, draft_id: int, request: ReplySendRequest) -> ReplySendResponse:
@@ -361,7 +361,7 @@ class ReplySendService:
         account = email.account
         body = draft.reviewed_body or draft.generated_body
         try:
-            credential = self._credential_resolver.resolve(account.credential_ref)
+            credential = self._credential_resolver.resolve(account.credential_ciphertext)
             message = build_message(
                 from_address=account.email_address,
                 from_name=None,

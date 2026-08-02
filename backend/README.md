@@ -68,10 +68,12 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 将输出写入本地 `.env` 的 `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY`，不得提交真实值。
 
-邮箱账户的 `credential_ref` 只保存环境变量名，例如
-`JOB_MAIL_EMAIL_CREDENTIAL_TEST_163`。授权码通过进程环境变量或本地 `.env`
-提供，不得放入 API 请求或数据库字段。创建账户后可通过 Swagger 依次调用
-`test-connection` 和 `sync`；同步只读 `INBOX`，默认最多处理最近 50 封新邮件。
+邮箱设置页允许用户直接填写服务商生成的授权码。授权码通过 API 传入后使用
+AES-GCM 加密保存，账户读取接口不会返回明文或密文。部署前需另行生成一把
+16、24 或 32 字节 AES 密钥，将十六进制结果写入本地 `.env` 的
+`JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY`；未配置时默认复用
+`JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY`。已有账户可在设置页重新授权；同步只读
+`INBOX`，默认最多处理最近 50 封新邮件。
 
 ## Alembic
 

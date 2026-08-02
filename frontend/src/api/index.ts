@@ -49,6 +49,12 @@ export const emailAccountApi = {
   list: () => http.get<EmailAccount[]>('/email-accounts').then(({ data }) => data),
   create: (payload: EmailAccountCreate) =>
     http.post<EmailAccount>('/email-accounts', payload).then(({ data }) => data),
+  updateAuthorizationCode: (id: number, authorization_code: string) =>
+    http
+      .patch<EmailAccount>(`/email-accounts/${id}/authorization-code`, {
+        authorization_code,
+      })
+      .then(({ data }) => data),
   setActive: (id: number, is_active: boolean) =>
     http
       .patch<EmailAccount>(`/email-accounts/${id}/active`, { is_active })

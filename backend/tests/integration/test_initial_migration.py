@@ -14,10 +14,10 @@ def make_alembic_config() -> Config:
     return config
 
 
-def test_eighth_migration_is_the_only_head() -> None:
+def test_email_authorization_migration_is_the_only_head() -> None:
     scripts = ScriptDirectory.from_config(make_alembic_config())
 
-    assert scripts.get_current_head() == "20260801_0008"
+    assert scripts.get_current_head() == "20260802_0010"
 
 
 def test_initial_migration_generates_ordered_mysql_sql() -> None:

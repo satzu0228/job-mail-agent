@@ -19,6 +19,7 @@ const account = {
   smtp_host: 'smtp.163.com',
   smtp_port: 465,
   smtp_security: 'SSL',
+  credential_configured: true,
   is_active: true,
   auto_sync_enabled: false,
   sync_interval_minutes: 10,
@@ -353,15 +354,31 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
     if (method === 'GET' && path === '/email-accounts') return json(route, state.accounts)
     if (method === 'POST' && path === '/email-accounts') {
       const payload = request.postDataJSON()
+      const safePayload = { ...payload }
+      Reflect.deleteProperty(safePayload, 'authorization_code')
       const created = {
         ...account,
-        ...payload,
+        ...safePayload,
         id: 2,
         email_address_masked: 'n***@qq.com',
         is_active: false,
       }
       state.accounts.push(created)
       return json(route, created, 201)
+    }
+    const authorizationMatch = path.match(
+      /^\/email-accounts\/(\d+)\/authorization-code$/,
+    )
+    if (method === 'PATCH' && authorizationMatch) {
+      const item = state.accounts.find(
+        (value) => value.id === Number(authorizationMatch[1]),
+      )
+      if (item) {
+        item.credential_configured = true
+        item.last_sync_status = null
+        item.last_sync_error = null
+      }
+      return json(route, item)
     }
     const activeMatch = path.match(/^\/email-accounts\/(\d+)\/active$/)
     if (method === 'PATCH' && activeMatch) {

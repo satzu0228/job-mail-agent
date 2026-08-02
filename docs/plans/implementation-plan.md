@@ -200,7 +200,8 @@ MVP 业务范围、非目标和验收场景已冻结，具体见 `docs/requireme
 5. 确定性 Orchestrator 协调 Classification、Extraction、Application、Reply 四个核心 Agent；不实现 Review Agent 和 LLM Supervisor。
 6. 有界手动同步与单封分析先同步执行，不引入 Celery/RQ。
 7. Vue 使用 REST + 状态轮询。
-8. MVP 数据库只保存 `credential_ref`，授权码从进程环境变量或受控 `.env` 配置读取，不写入数据库。
+8. 邮箱授权码由用户在设置页填写，后端使用独立 AES-GCM 密钥加密入库；API 不回显
+   明文或密文，加密密钥仍只从部署环境加载。
 
 完整理由、代价和升级条件见 `docs/architecture/architecture-decisions.md`。
 
@@ -660,11 +661,12 @@ POST /api/v1/reply-drafts/{id}/send
 - 自定义 IMAP/SMTP 邮箱。
 
 选择预设 Provider 后，由前端自动填充 IMAP/SMTP 主机、端口和安全方式，普通用户
-只需填写邮箱地址和后端凭据引用。服务器参数收纳在“高级设置”中；选择自定义邮箱
+只需填写邮箱地址和服务商生成的授权码。页面按 Provider 展示授权码获取步骤和官方
+入口；服务器参数收纳在“高级设置”中；选择自定义邮箱
 时才默认展开并要求用户填写。
 
-本扩展继续使用现有 `credential_ref` 安全边界，不在浏览器、普通业务字段或日志中
-保存授权码和应用专用密码。连接测试仍须分别展示 IMAP 和 SMTP 结果，不能因为收件
+授权码提交后立即以 AES-GCM 加密保存，生产部署需使用 HTTPS；授权码不在账户响应、日志或测试快照中
+回显；浏览器不持久化授权码。连接测试仍须分别展示 IMAP 和 SMTP 结果，不能因为收件
 连接成功就把发件能力标记为可用。
 
 Gmail 首版只支持应用专用密码方式，并在界面提示其账户需要满足 Google 的相关安全

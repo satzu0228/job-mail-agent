@@ -6,6 +6,7 @@ from email import policy
 from email.parser import BytesParser
 from typing import Protocol
 
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -37,14 +38,16 @@ from app.infrastructure.email import (
 )
 from app.infrastructure.security import (
     CredentialNotConfiguredError,
-    EnvironmentCredentialResolver,
+    EncryptedCredentialResolver,
 )
 
 INBOX = "INBOX"
 
 
 class CredentialResolver(Protocol):
-    def resolve(self, credential_ref: str) -> str: ...
+    def protect(self, authorization_code: SecretStr | str) -> str: ...
+
+    def resolve(self, credential_ciphertext: str | None) -> str: ...
 
 
 class ImapClient(Protocol):
@@ -104,7 +107,7 @@ class EmailAccessService:
         self._user_id = user_id
         self.accounts = EmailAccountRepository(session, user_id)
         self.emails = EmailRepository(session, user_id)
-        self._credential_resolver = credential_resolver or EnvironmentCredentialResolver()
+        self._credential_resolver = credential_resolver or EncryptedCredentialResolver()
         self._imap_client = imap_client or ImapMailboxClient(timeout_seconds)
         self._smtp_tester = smtp_tester or SmtpConnectionTester(timeout_seconds)
         self._default_sync_limit = default_sync_limit
@@ -112,6 +115,10 @@ class EmailAccessService:
 
     def create_account(self, data: EmailAccountCreate) -> EmailAccount:
         try:
+            values = data.model_dump(exclude={"authorization_code"})
+            credential_ciphertext = self._credential_resolver.protect(
+                data.authorization_code
+            )
             with self._session.begin():
                 self._ensure_demo_user()
                 if data.is_active:
@@ -119,11 +126,32 @@ class EmailAccessService:
                     self.accounts.deactivate_others()
                 account = EmailAccount(
                     user_id=self._user_id,
-                    **data.model_dump(),
+                    **values,
+                    credential_ciphertext=credential_ciphertext,
                 )
                 return self.accounts.add(account)
+        except CredentialNotConfiguredError as exc:
+            raise ResourceConflictError(str(exc)) from exc
         except IntegrityError as exc:
             raise ResourceConflictError("该邮箱账户已存在") from exc
+
+    def update_authorization_code(
+        self,
+        account_id: int,
+        *,
+        authorization_code: SecretStr | str,
+    ) -> EmailAccount:
+        try:
+            ciphertext = self._credential_resolver.protect(authorization_code)
+        except CredentialNotConfiguredError as exc:
+            raise ResourceConflictError(str(exc)) from exc
+        with self._session.begin():
+            account = self.accounts.get(account_id, for_update=True)
+            account.credential_ciphertext = ciphertext
+            account.last_sync_status = None
+            account.last_sync_error = None
+            self._session.flush()
+            return account
 
     def set_account_active(self, account_id: int, *, is_active: bool) -> EmailAccount:
         with self._session.begin():
@@ -165,7 +193,7 @@ class EmailAccessService:
             raise ResourceConflictError("原邮件超过安全下载上限，附件不可下载")
         account = self.accounts.get(email.account_id)
         try:
-            credential = self._credential_resolver.resolve(account.credential_ref)
+            credential = self._credential_resolver.resolve(account.credential_ciphertext)
             raw_message = self._imap_client.fetch_raw_message(
                 account,
                 credential,
@@ -199,7 +227,7 @@ class EmailAccessService:
         email = self.emails.get(email_id)
         account = self.accounts.get(email.account_id)
         try:
-            credential = self._credential_resolver.resolve(account.credential_ref)
+            credential = self._credential_resolver.resolve(account.credential_ciphertext)
             raw_message = self._imap_client.fetch_raw_message(
                 account,
                 credential,
@@ -224,10 +252,8 @@ class EmailAccessService:
 
     def test_connection(self, account_id: int) -> EmailConnectionTestResult:
         account = self.accounts.get(account_id)
-        if not account.is_active:
-            raise ResourceConflictError("邮箱账户已停用")
         try:
-            credential = self._credential_resolver.resolve(account.credential_ref)
+            credential = self._credential_resolver.resolve(account.credential_ciphertext)
         except CredentialNotConfiguredError:
             failure = ConnectionCheck(success=False, message="邮箱凭据尚未配置")
             return EmailConnectionTestResult(imap=failure, smtp=failure)
@@ -252,7 +278,7 @@ class EmailAccessService:
             raise ResourceConflictError("邮箱账户已停用")
         sync_limit = limit or self._default_sync_limit
         try:
-            credential = self._credential_resolver.resolve(account.credential_ref)
+            credential = self._credential_resolver.resolve(account.credential_ciphertext)
             uid_validity, remote_messages = self._imap_client.fetch_recent(
                 account,
                 credential,

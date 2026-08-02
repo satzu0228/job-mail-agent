@@ -37,7 +37,7 @@ from app.infrastructure.email import (
 )
 from app.infrastructure.security import (
     CredentialNotConfiguredError,
-    EnvironmentCredentialResolver,
+    EncryptedCredentialResolver,
 )
 
 ARCHIVE_FOLDER = "JobMailArchive"
@@ -45,7 +45,7 @@ ARCHIVE_GRAPH_VERSION = "phase-11-archive.v1"
 
 
 class CredentialResolver(Protocol):
-    def resolve(self, credential_ref: str) -> str: ...
+    def resolve(self, credential_ciphertext: str | None) -> str: ...
 
 
 class ImapMover(Protocol):
@@ -77,7 +77,7 @@ class EmailArchiveService:
         self._session = session
         self._user_id = user_id
         self._emails = EmailRepository(session, user_id)
-        self._credential_resolver = credential_resolver or EnvironmentCredentialResolver()
+        self._credential_resolver = credential_resolver or EncryptedCredentialResolver()
         self._mover = mover or ImapMailboxClient(timeout_seconds)
 
     def propose_archive(self, email_id: int) -> ReviewTask:
@@ -227,7 +227,9 @@ class EmailArchiveService:
         self._session.commit()
 
         try:
-            credential = self._credential_resolver.resolve(email.account.credential_ref)
+            credential = self._credential_resolver.resolve(
+                email.account.credential_ciphertext
+            )
             result = self._mover.move(
                 email.account,
                 credential,

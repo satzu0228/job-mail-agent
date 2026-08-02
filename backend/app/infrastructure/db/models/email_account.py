@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,7 +50,7 @@ class EmailAccount(TimestampMixin, Base):
         varchar_enum(TransportSecurity, name="smtp_security", length=16),
         nullable=False,
     )
-    credential_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
