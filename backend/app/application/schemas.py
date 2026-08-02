@@ -397,6 +397,7 @@ class ReviewDecision(ApiSchema):
     approve: bool
     reviewed_payload: dict[str, Any] | None = None
     reason: str | None = Field(default=None, max_length=1000)
+    auto_approve: bool = False
 
 
 class ReviewTaskRead(UtcResponseSchema):
@@ -445,6 +446,7 @@ class ReviewDecisionResponse(ApiSchema):
     review_task: ReviewTaskRead
     execution: ActionExecutionRead | None = None
     follow_up_review_task: ReviewTaskRead | None = None
+    auto_approved_tasks: list[ReviewTaskRead] = Field(default_factory=list)
 
 
 class WorkflowRunRead(UtcResponseSchema):

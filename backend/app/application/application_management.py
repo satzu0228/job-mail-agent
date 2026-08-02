@@ -1202,7 +1202,7 @@ class ReviewTaskService:
         )
         location = _extracted_value(extraction.get("location"))
         meeting_url = _extracted_value(extraction.get("meeting_url"))
-        interview_round = self._infer_interview_round(
+        interview_round = self._infer_next_interview_round(
             application.id,
             " ".join(
                 value
@@ -1260,6 +1260,20 @@ class ReviewTaskService:
         explicit = _parse_interview_round(text)
         if explicit is not None:
             return explicit
+        latest = self._session.scalar(
+            select(func.max(Task.interview_round)).where(
+                Task.application_id == application_id,
+                Task.task_type == TaskType.INTERVIEW,
+            )
+        )
+        return int(latest or 0) + 1
+
+    def _infer_next_interview_round(self, application_id: int, text: str) -> int:
+        """推断新面试的轮次。从文本中取最大轮次号（因为新面试总是最后提及的），
+        如果解析不到，则用已有最大轮次+1。"""
+        max_parsed = _parse_interview_round_max(text)
+        if max_parsed is not None:
+            return max_parsed
         latest = self._session.scalar(
             select(func.max(Task.interview_round)).where(
                 Task.application_id == application_id,
@@ -1538,6 +1552,28 @@ def _parse_interview_round(text: str) -> int | None:
     raw_value = match.group("round")
     value = int(raw_value) if raw_value.isdigit() else _CHINESE_ROUND_VALUES[raw_value]
     return value if 1 <= value <= 20 else None
+
+
+def _parse_interview_round_max(text: str) -> int | None:
+    """查找文本中提到的所有面试轮次，返回最大值。用于新面试日程创建。"""
+    if re.search(r"(?:初面|首面|首轮面试|第一轮面试)", text, re.IGNORECASE):
+        pass  # Still scan all matches, don't short-circuit
+    matches = re.finditer(
+        r"(?:第\s*)?(?P<round>\d{1,2}|[一二三四五六七八九十])\s*(?:轮\s*)?面",
+        text,
+        re.IGNORECASE,
+    )
+    max_value: int | None = None
+    for m in matches:
+        raw = m.group("round")
+        value = int(raw) if raw.isdigit() else _CHINESE_ROUND_VALUES.get(raw)
+        if value is not None and 1 <= value <= 20:
+            if max_value is None or value > max_value:
+                max_value = value
+    if re.search(r"(?:初面|首面|首轮面试|第一轮面试)", text, re.IGNORECASE):
+        if max_value is None or 1 > max_value:
+            max_value = 1
+    return max_value
 
 
 def _interview_round_label(round_value: int) -> str:

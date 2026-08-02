@@ -373,6 +373,7 @@ export interface ReviewDecisionResponse {
     error_message: string | null
   } | null
   follow_up_review_task: ReviewTask | null
+  auto_approved_tasks: ReviewTask[]
 }
 
 export interface InterviewRound {

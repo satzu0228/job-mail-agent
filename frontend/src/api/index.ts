@@ -229,6 +229,7 @@ export const reviewApi = {
       approve: boolean
       reviewed_payload?: Record<string, unknown> | null
       reason?: string | null
+      auto_approve?: boolean
     },
   ) =>
     http

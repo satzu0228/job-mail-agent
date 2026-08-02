@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Refresh, Search, Warning } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -216,6 +216,35 @@ async function approve() {
   await decide(true, payload)
 }
 
+async function approveWithFollowUp() {
+  if (!selected.value || selected.value.status !== 'PENDING') return
+  const payload = parsePayload()
+  if (!payload) return
+  if (selected.value.action_type === 'LINK_APPLICATION') {
+    if (!selectedApplicationId.value) {
+      ElMessage.warning('请选择要关联的求职申请')
+      return
+    }
+    payload.application_id = selectedApplicationId.value
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '批准后将自动执行后续所有非发送操作（关联申请→阶段变更→日程创建），涉及邮件发送的回复仍需单独确认。',
+      '批准并自动执行后续',
+      {
+        confirmButtonText: '批准并自动执行',
+        cancelButtonText: '返回检查',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  await decide(true, payload, true)
+}
+
 async function reject() {
   if (!selected.value || selected.value.status !== 'PENDING') return
   if (!decisionReason.value.trim()) {
@@ -225,7 +254,11 @@ async function reject() {
   await decide(false, null)
 }
 
-async function decide(approveDecision: boolean, payload: Record<string, unknown> | null) {
+async function decide(
+  approveDecision: boolean,
+  payload: Record<string, unknown> | null,
+  autoApprove = false,
+) {
   if (!selected.value) return
   deciding.value = true
   try {
@@ -234,22 +267,37 @@ async function decide(approveDecision: boolean, payload: Record<string, unknown>
       approve: approveDecision,
       reviewed_payload: payload,
       reason: decisionReason.value.trim() || null,
+      auto_approve: autoApprove,
     })
 
-    ElMessage.success(
-      approveDecision
-        ? selected.value.action_type === 'SEND_REPLY'
+    // Show auto-approved summary if any tasks were auto-approved
+    if (response.auto_approved_tasks?.length) {
+      const labels = response.auto_approved_tasks.map(
+        (t) => reviewActionMeta[t.action_type] ?? t.action_type,
+      )
+      ElMessage.success(
+        `已自动批准 ${labels.length} 项：${labels.join('、')}`,
+      )
+    } else if (approveDecision) {
+      ElMessage.success(
+        selected.value.action_type === 'SEND_REPLY'
           ? '回复已确认发送'
           : selected.value.action_type === 'ARCHIVE_EMAIL'
             ? '邮件已归档'
             : selected.value.action_type === 'RESTORE_EMAIL'
               ? '邮件已恢复'
-          : '审核已批准'
-        : '审核已拒绝',
-    )
+            : '审核已批准',
+      )
+    } else {
+      ElMessage.success('审核已拒绝')
+    }
 
     if (response.follow_up_review_task) {
-      ElMessage.info('工作流已进入下一项审核')
+      if (response.follow_up_review_task.action_type === 'SEND_REPLY') {
+        ElMessage.info('工作流已进入回复确认环节，请检查回复内容')
+      } else {
+        ElMessage.info('工作流已进入下一项审核')
+      }
       await loadData()
       openTask(response.follow_up_review_task)
     } else {
@@ -270,12 +318,18 @@ async function batchApprove() {
     ElMessage.info('没有待审核的任务')
     return
   }
+  const firstTask = pendingTasks[0]
+  const nonSendReplyCount = pendingTasks.filter(
+    (task) => task.action_type !== 'SEND_REPLY',
+  ).length
   try {
     await ElMessageBox.confirm(
-      `将依次批准 ${pendingTasks.length} 项待审核任务，包括关联申请、阶段变更、日程创建等。建议先确认第一项（新建申请）是否正确。`,
-      '批量批准全部审核',
+      nonSendReplyCount > 1
+        ? `将批准第一项审核并自动执行后续 ${nonSendReplyCount - 1} 项（阶段变更、日程创建等）。涉及邮件发送的回复仍需单独确认。`
+        : '将批准该审核并自动执行后续操作。涉及邮件发送的回复仍需单独确认。',
+      '一键批准',
       {
-        confirmButtonText: `批准全部 ${pendingTasks.length} 项`,
+        confirmButtonText: '一键批准',
         cancelButtonText: '取消',
         type: 'warning',
       },
@@ -285,40 +339,56 @@ async function batchApprove() {
   }
 
   batchApproving.value = true
-  let approved = 0
-  let failed = 0
-  for (const task of pendingTasks) {
-    try {
-      const payloads: Record<ReviewActionType, Record<string, unknown>> = {
-        CREATE_APPLICATION: {},
-        LINK_APPLICATION: { application_id: (task.proposed_payload as Record<string, unknown>).application_id },
-        UPDATE_APPLICATION_STAGE: {},
-        UPDATE_INTERVIEW_RESULT: {},
-        CREATE_TASK: {},
-        UPDATE_TASK: {},
-        SEND_REPLY: {},
-        ARCHIVE_EMAIL: {},
-        RESTORE_EMAIL: {},
-      }
-      await reviewApi.decide(task.id, {
-        version: task.version,
-        approve: true,
-        reviewed_payload: payloads[task.action_type] || null,
-        reason: '批量批准',
-      })
-      approved++
-    } catch {
-      failed++
+  try {
+    if (!firstTask) return
+    const payload: Record<ReviewActionType, Record<string, unknown>> = {
+      CREATE_APPLICATION: {},
+      LINK_APPLICATION: {
+        application_id: (firstTask.proposed_payload as Record<string, unknown>)
+          .application_id,
+      },
+      UPDATE_APPLICATION_STAGE: {},
+      UPDATE_INTERVIEW_RESULT: {},
+      CREATE_TASK: {},
+      UPDATE_TASK: {},
+      SEND_REPLY: {},
+      ARCHIVE_EMAIL: {},
+      RESTORE_EMAIL: {},
     }
-  }
-  batchApproving.value = false
+    const response = await reviewApi.decide(firstTask.id, {
+      version: firstTask.version,
+      approve: true,
+      reviewed_payload: payload[firstTask.action_type] || null,
+      reason: '一键批准',
+      auto_approve: true,
+    })
 
-  if (failed === 0) {
-    ElMessage.success(`已批准全部 ${approved} 项审核`)
-  } else {
-    ElMessage.warning(`批准 ${approved} 项，${failed} 项失败（可能因为依赖顺序，请手动处理）`)
+    // Show auto-approved summary
+    if (response.auto_approved_tasks?.length) {
+      const labels = response.auto_approved_tasks.map(
+        (t) => reviewActionMeta[t.action_type] ?? t.action_type,
+      )
+      ElMessage.success(
+        `已自动批准 ${labels.length} 项：${labels.join('、')}`,
+      )
+    } else {
+      ElMessage.success('审核已批准')
+    }
+
+    if (response.follow_up_review_task) {
+      if (response.follow_up_review_task.action_type === 'SEND_REPLY') {
+        ElMessage.info('工作流已进入回复确认环节，请检查回复内容')
+      }
+      await loadData()
+      openTask(response.follow_up_review_task)
+    } else {
+      await loadData()
+    }
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    batchApproving.value = false
   }
-  await loadData()
 }
 
 function payloadSummary(task: ReviewTask): string {
@@ -464,14 +534,19 @@ onMounted(loadData)
           :prefix-icon="Search"
           placeholder="搜索审核任务"
         />
-        <ElButton
+        <ElTooltip
           v-if="tasks.filter((t) => t.status === 'PENDING').length > 0"
-          type="primary"
-          :loading="batchApproving"
-          @click="batchApprove"
+          content="批准第一项后自动执行后续操作（不含邮件发送）"
+          placement="bottom"
         >
-          批准全部 {{ tasks.filter((t) => t.status === 'PENDING').length }} 项
-        </ElButton>
+          <ElButton
+            type="primary"
+            :loading="batchApproving"
+            @click="batchApprove"
+          >
+            一键批准
+          </ElButton>
+        </ElTooltip>
         <ElButton :icon="Refresh" @click="loadData">刷新</ElButton>
       </div>
     </div>
@@ -673,6 +748,13 @@ onMounted(loadData)
       <template v-if="selected?.status === 'PENDING'" #footer>
         <div class="drawer-actions">
           <ElButton :disabled="deciding" @click="reject">拒绝</ElButton>
+          <ElButton
+            v-if="selected.action_type !== 'SEND_REPLY' && selected.action_type !== 'ARCHIVE_EMAIL' && selected.action_type !== 'RESTORE_EMAIL'"
+            :disabled="deciding"
+            @click="approveWithFollowUp"
+          >
+            批准并自动执行后续
+          </ElButton>
           <ElButton type="primary" :loading="deciding" @click="approve">
             {{ selected.action_type === 'SEND_REPLY' ? '确认并发送' : '批准' }}
           </ElButton>

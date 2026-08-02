@@ -36,7 +36,7 @@ from app.application.schemas import (
     ReviewTaskRead,
     WorkflowRunRead,
 )
-from app.domain.enums import EmailParseStatus, ExecutionStatus, ReviewTaskStatus, WorkflowRunStatus
+from app.domain.enums import EmailParseStatus, ExecutionStatus, ReviewActionType, ReviewTaskStatus, WorkflowRunStatus
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
@@ -520,6 +520,14 @@ class JobMailWorkflowService:
                 config={"configurable": {"thread_id": thread_id}},
             )
 
+        # Auto-approve follow-up tasks when auto_approve is enabled.
+        auto_approved: list[ReviewTaskRead] = []
+        if decision.auto_approve and decision.approve:
+            auto_approved = self._auto_approve_follow_ups(
+                task_id=task_id,
+                thread_id=thread_id,
+            )
+
         with self._session_factory() as session:
             review_service = ReviewTaskService(
                 session,
@@ -530,11 +538,107 @@ class JobMailWorkflowService:
                 session,
                 response.review_task.workflow_run_id,
             )
-            return self._attach_current_follow_up(
+            result = self._attach_current_follow_up(
                 response,
                 workflow,
                 review_service,
             )
+            if auto_approved:
+                result = result.model_copy(
+                    update={"auto_approved_tasks": auto_approved}
+                )
+            return result
+
+    def _auto_approve_follow_ups(
+        self,
+        *,
+        task_id: str,
+        thread_id: str,
+    ) -> list[ReviewTaskRead]:
+        """自动批准 follow-up 审核，直到遇到 SEND_REPLY 或无更多 follow-up。"""
+        auto_approved: list[ReviewTaskRead] = []
+        max_iterations = 10
+        current_task_id = task_id
+
+        for _ in range(max_iterations):
+            # Read the latest workflow state to find the pending follow-up.
+            with self._session_factory() as session:
+                review_service = ReviewTaskService(session, self._user_id)
+                current_response = review_service.response_for_task(current_task_id)
+                workflow = self._owned_workflow(
+                    session,
+                    current_response.review_task.workflow_run_id,
+                )
+                follow_up = self._resolve_follow_up(
+                    current_response, workflow, review_service
+                )
+                if follow_up is None:
+                    break
+                if follow_up.action_type == ReviewActionType.SEND_REPLY:
+                    # SEND_REPLY requires explicit human confirmation.
+                    break
+                if follow_up.status != ReviewTaskStatus.PENDING:
+                    break
+                follow_up_id = follow_up.id
+                follow_up_version = follow_up.version
+
+            # Auto-approve the follow-up.
+            with self._session_factory() as session:
+                ReviewTaskService(session, self._user_id).record_decision(
+                    follow_up_id,
+                    ReviewDecision(
+                        version=follow_up_version,
+                        approve=True,
+                        reason="自动批准（一键批准）",
+                    ),
+                    update_workflow=False,
+                )
+
+            # Resume the graph to execute the approved task.
+            with self._session_factory() as session:
+                workflow = self._owned_workflow(
+                    session,
+                    current_response.review_task.workflow_run_id,
+                )
+                if (
+                    workflow.status is WorkflowRunStatus.WAITING_REVIEW
+                    and workflow.pending_review_task_id == follow_up_id
+                ):
+                    self._graph.invoke(
+                        Command(resume={"review_task_id": follow_up_id}),
+                        config={"configurable": {"thread_id": thread_id}},
+                    )
+
+            # Record the auto-approved task.
+            with self._session_factory() as session:
+                auto_approved_task = ReviewTaskService(
+                    session, self._user_id
+                ).get(follow_up_id)
+                auto_approved.append(
+                    ReviewTaskRead.model_validate(auto_approved_task)
+                )
+
+            current_task_id = follow_up_id
+
+        return auto_approved
+
+    @staticmethod
+    def _resolve_follow_up(
+        response: ReviewDecisionResponse,
+        workflow: WorkflowRun,
+        review_service: ReviewTaskService,
+    ) -> ReviewTaskRead | None:
+        """从响应或 workflow 中解析当前等待的 follow-up 审核。"""
+        if response.follow_up_review_task is not None:
+            return response.follow_up_review_task
+        pending_id = workflow.pending_review_task_id
+        if (
+            workflow.status is not WorkflowRunStatus.WAITING_REVIEW
+            or not pending_id
+            or pending_id == response.review_task.id
+        ):
+            return None
+        return ReviewTaskRead.model_validate(review_service.get(pending_id))
 
     @staticmethod
     def _attach_current_follow_up(

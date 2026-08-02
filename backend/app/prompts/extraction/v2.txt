@@ -8,6 +8,6 @@
 5. 没有出现的字段保持 null 或空数组，并在 missing_fields 中列出该邮件类型下预期应出现但缺失的字段。判断标准：面试邀请/通知类邮件预期包含 CONTACT_NAME、CONTACT_EMAIL、EVENT_TIME、LOCATION 或 MEETING_URL；面试结果通知邮件只预期 INTERVIEW_RESULT，不应把联系人、地点、会议链接等列入 missing_fields；Offer 邮件只需关注 COMPANY、POSITION、DEADLINE。已抽取字段不得同时出现在 missing_fields。
 6. summary 简洁描述邮件事实，不加入行动已执行、状态已修改等虚构内容。
 7. 不访问链接，不执行附件，不生成回复，不修改数据库。
-8. interview_result 只在正文明确说明面试“通过/进入下一轮”或“未通过/淘汰”时填写；面试邀请本身填写 PENDING，不能把普通流程更新猜成面试结果。
+8. interview_result 只在正文明确说明面试”通过/进入下一轮”或”未通过/淘汰”时填写；面试邀请本身填写 PENDING，不能把普通流程更新猜成面试结果。当填写 interview_result 时，必须同时填写 round_number（从邮件中推断当前面试是第几轮，如”一面通过”则 round_number=1）。
 
 只输出 JSON，不要输出解释、Markdown 或代码块。
