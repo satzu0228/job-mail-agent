@@ -170,7 +170,7 @@ class ExtractionOutput(AgentSchema):
     meeting_url: ExtractedUrl | None = None
     materials: list[ExtractedText] = Field(default_factory=list, max_length=20)
     overall_confidence: Confidence
-    missing_fields: list[ExtractionField] = Field(default_factory=list, max_length=11)
+    missing_fields: list[ExtractionField] = Field(default_factory=list, max_length=12)
     uncertainties: list[ShortText] = Field(default_factory=list, max_length=20)
 
     @field_validator("missing_fields")
@@ -200,13 +200,20 @@ class ExtractionOutput(AgentSchema):
             ExtractionField.MATERIALS: self.materials,
         }
 
-        inconsistent = [
+        # Only check that fields listed in missing_fields are actually null/empty.
+        # The reverse (all null fields must be in missing_fields) is too strict:
+        # different email categories expect different fields (e.g. INTERVIEW_RESULT
+        # and DEADLINE are not expected for interview invitations, so they should
+        # not be listed in missing_fields even though they are null).
+        claimed_missing_but_present = [
             field
-            for field, value in values_by_field.items()
-            if (not value) != (field in self.missing_fields)
+            for field in self.missing_fields
+            if values_by_field.get(field)
         ]
-        if inconsistent:
-            names = ", ".join(field.value for field in inconsistent)
-            raise ValueError(f"missing_fields inconsistent with extracted values: {names}")
+        if claimed_missing_but_present:
+            names = ", ".join(field.value for field in claimed_missing_but_present)
+            raise ValueError(
+                f"missing_fields lists fields that are actually present: {names}"
+            )
 
         return self

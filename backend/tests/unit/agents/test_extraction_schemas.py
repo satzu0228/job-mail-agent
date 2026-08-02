@@ -158,13 +158,33 @@ def test_unresolved_datetime_requires_confirmation_and_reason() -> None:
         )
 
 
-def test_missing_fields_must_match_absent_values() -> None:
+def test_missing_fields_cannot_claim_absent_fields_are_present() -> None:
+    """A field listed in missing_fields must actually be null/empty."""
     result = valid_extraction_output()
     payload = result.model_dump()
-    payload["missing_fields"] = []
+    # COMPANY is present, so it should NOT be in missing_fields
+    payload["missing_fields"].append(ExtractionField.COMPANY)
 
-    with pytest.raises(ValidationError, match="missing_fields inconsistent"):
+    with pytest.raises(ValidationError, match="actually present"):
         ExtractionOutput.model_validate(payload)
+
+
+def test_null_fields_not_required_in_missing_fields() -> None:
+    """Null fields are allowed to be omitted from missing_fields when they are
+    not expected for the current email category (e.g. INTERVIEW_RESULT and
+    DEADLINE for an interview invitation)."""
+    result = valid_extraction_output()
+    payload = result.model_dump()
+    # Remove INTERVIEW_RESULT and DEADLINE from missing_fields — they are null
+    # but for an interview invitation they are not expected, so this is valid.
+    payload["interview_result"] = None
+    payload["missing_fields"] = [
+        f for f in payload["missing_fields"]
+        if f not in {ExtractionField.INTERVIEW_RESULT, ExtractionField.DEADLINE}
+    ]
+
+    # Should not raise — new logic only checks that missing_fields are actually null
+    ExtractionOutput.model_validate(payload)
 
 
 def test_present_field_cannot_also_be_marked_missing() -> None:

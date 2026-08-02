@@ -39,7 +39,10 @@ def _extraction() -> ExtractionOutput:
     return ExtractionOutput(
         summary="招聘方邀请候选人参加线上面试。",
         overall_confidence=0.88,
-        missing_fields=list(ExtractionField),
+        missing_fields=[
+            ExtractionField.INTERVIEW_RESULT,
+            ExtractionField.DEADLINE,
+        ],
     )
 
 

@@ -60,7 +60,10 @@ def test_classification_and_extraction_runners_use_versioned_prompts() -> None:
     extraction = ExtractionOutput(
         summary="星海科技邀请用户参加后端开发工程师线上一面。",
         overall_confidence=0.9,
-        missing_fields=list(ExtractionField),
+        missing_fields=[
+            ExtractionField.INTERVIEW_RESULT,
+            ExtractionField.DEADLINE,
+        ],
     )
     extraction_invoker = StubInvoker(extraction)
     actual_extraction = ExtractionAgent(extraction_invoker).run(
