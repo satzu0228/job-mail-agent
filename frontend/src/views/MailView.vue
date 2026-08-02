@@ -240,11 +240,13 @@ async function syncAccount() {
     // 按邮件先后顺序串行启动工作流（顺序影响推迟关联逻辑）
     batchProcessing.value = true
     let successCount = 0
+    let reviewTaskCount = 0
     for (let i = 0; i < newIds.length; i++) {
       batchProgress.value = `正在智能处理 (${i + 1}/${newIds.length})...`
       try {
-        await emailApi.startWorkflow(newIds[i]!)
+        const run = await emailApi.startWorkflow(newIds[i]!)
         successCount++
+        if (run.pending_review_task_id) reviewTaskCount++
       } catch (error) {
         console.error(`Email ${newIds[i]} workflow failed:`, error)
         // 单封失败不阻塞后续
@@ -254,9 +256,15 @@ async function syncAccount() {
     batchProgress.value = ''
 
     await loadBaseData()
-    ElMessage.success(
-      `${successCount}/${newIds.length} 封邮件处理完毕，请前往审核中心审批`,
-    )
+    if (reviewTaskCount > 0) {
+      ElMessage.success(
+        `${successCount}/${newIds.length} 封邮件处理完毕，生成 ${reviewTaskCount} 项审核，请前往审核中心审批`,
+      )
+    } else {
+      ElMessage.success(
+        `${successCount}/${newIds.length} 封邮件处理完毕，未发现需要审核的求职邮件`,
+      )
+    }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
