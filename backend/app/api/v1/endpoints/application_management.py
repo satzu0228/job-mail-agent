@@ -13,6 +13,7 @@ from app.application.application_management import (
     ReviewTaskService,
 )
 from app.application.archive import EmailArchiveService
+from app.application.llm_config import create_chat_model_for_user
 from app.application.schemas import (
     ApplicationMatchResponse,
     ReviewDecision,
@@ -23,7 +24,6 @@ from app.application.schemas import (
 from app.core.config import Settings, get_settings
 from app.domain.enums import ReviewActionType, ReviewTaskStatus
 from app.infrastructure.db.session import get_db_session
-from app.infrastructure.llm import create_chat_model
 
 router = APIRouter()
 SessionDependency = Annotated[Session, Depends(get_db_session)]
@@ -34,7 +34,7 @@ def management_service(
     session: SessionDependency,
     settings: SettingsDependency,
 ) -> ApplicationManagementService:
-    model = create_chat_model(settings)
+    model = create_chat_model_for_user(session, settings)
     return ApplicationManagementService(
         session,
         settings.demo_user_id,

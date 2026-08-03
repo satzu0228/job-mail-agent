@@ -13,6 +13,7 @@ from app.agents.extraction.agent import ExtractionAgent
 from app.agents.reply import ReplyAgent
 from app.application.application_management import ReviewTaskService
 from app.application.archive import EmailArchiveService
+from app.application.llm_config import create_chat_model_for_user
 from app.application.schemas import (
     ReviewDecision,
     ReviewDecisionResponse,
@@ -26,7 +27,6 @@ from app.core.config import BACKEND_DIR, Settings, get_settings
 from app.infrastructure.checkpoint import sqlite_checkpointer
 from app.infrastructure.db.models.workflow_run import WorkflowRun
 from app.infrastructure.db.session import get_db_session
-from app.infrastructure.llm import create_chat_model
 from app.workflows import GRAPH_VERSION
 
 router = APIRouter()
@@ -48,7 +48,7 @@ def _workflow_service(
     settings: Settings,
 ) -> Generator[JobMailWorkflowService, None, None]:
     factory = _session_factory(session)
-    model = create_chat_model(settings)
+    model = create_chat_model_for_user(session, settings)
     classification = ClassificationAgent.from_model(model)
     extraction = ExtractionAgent.from_model(model)
     application = ApplicationAgent.from_model(model)

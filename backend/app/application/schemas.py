@@ -734,3 +734,66 @@ class InterviewRoundResultUpdate(ApiSchema):
 class InterviewRoundResultResponse(ApiSchema):
     application: JobApplicationRead
     round: InterviewRoundRead
+
+
+class LlmConfigCreate(ApiSchema):
+    """新增一条 LLM 配置；provider 固定为 deepseek，由服务层写入。"""
+
+    model: str = Field(default="deepseek-chat", min_length=1, max_length=64)
+    api_key: SecretStr | None = Field(default=None, min_length=1, max_length=256)
+    base_url: str | None = Field(default=None, max_length=512)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    is_active: bool = False
+
+    @field_validator("model", "base_url", "api_key", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return None if not normalized else normalized
+
+
+class LlmConfigUpdate(ApiSchema):
+    """更新 LLM 配置；api_key 不传或为空表示保留原值。"""
+
+    model: str | None = Field(default=None, min_length=1, max_length=64)
+    api_key: SecretStr | None = Field(default=None, min_length=1, max_length=256)
+    base_url: str | None = Field(default=None, max_length=512)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    timeout_seconds: float | None = Field(default=None, gt=0, le=600)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+
+    @field_validator("model", "base_url", "api_key", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return None if not normalized else normalized
+
+
+class LlmConfigRead(UtcResponseSchema):
+    id: int
+    provider: str
+    model: str
+    base_url: str | None
+    temperature: float
+    timeout_seconds: float
+    max_retries: int
+    is_active: bool
+    api_key_configured: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class LlmConfigActiveUpdate(ApiSchema):
+    is_active: bool
+
+
+class LlmConfigTestResult(ApiSchema):
+    success: bool
+    message: str
+    latency_ms: int | None = None

@@ -9,6 +9,7 @@ from app.infrastructure.db.repositories.business import (
     VersionConflictError,
 )
 from app.infrastructure.db.repositories.email_analysis import EmailAnalysisRepository
+from app.infrastructure.db.repositories.llm_config_repository import LlmConfigRepository
 
 __all__ = [
     "EmailAnalysisRepository",
@@ -16,6 +17,7 @@ __all__ = [
     "EmailRepository",
     "EntityNotFoundError",
     "JobApplicationRepository",
+    "LlmConfigRepository",
     "ReplyDraftRepository",
     "ResourceConflictError",
     "TaskRepository",

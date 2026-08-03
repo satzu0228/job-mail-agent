@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     application_management,
     business,
     health,
+    llm_config,
     reply,
     workflow,
 )
@@ -16,3 +17,4 @@ api_router.include_router(analysis.router)
 api_router.include_router(application_management.router)
 api_router.include_router(workflow.router)
 api_router.include_router(reply.router)
+api_router.include_router(llm_config.router)

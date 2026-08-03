@@ -11,6 +11,7 @@ from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, JsonObject, Ti
 if TYPE_CHECKING:
     from app.infrastructure.db.models.email_account import EmailAccount
     from app.infrastructure.db.models.job_application import JobApplication
+    from app.infrastructure.db.models.llm_config import LlmConfig
 
 
 class User(TimestampMixin, Base):
@@ -38,3 +39,4 @@ class User(TimestampMixin, Base):
 
     email_accounts: Mapped[list[EmailAccount]] = relationship(back_populates="user")
     job_applications: Mapped[list[JobApplication]] = relationship(back_populates="user")
+    llm_configs: Mapped[list[LlmConfig]] = relationship(back_populates="user")

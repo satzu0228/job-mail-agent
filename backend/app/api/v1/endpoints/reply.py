@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.agents.reply import ReplyAgent
+from app.application.llm_config import create_chat_model_for_user
 from app.application.reply import ReplyGenerationService, ReplySendService
 from app.application.schemas import (
     ReplyGenerationRequest,
@@ -13,7 +14,6 @@ from app.application.schemas import (
 )
 from app.core.config import Settings, get_settings
 from app.infrastructure.db.session import get_db_session
-from app.infrastructure.llm import create_chat_model
 
 router = APIRouter()
 SessionDependency = Annotated[Session, Depends(get_db_session)]
@@ -27,7 +27,7 @@ def generation_service(
     return ReplyGenerationService(
         session,
         settings.demo_user_id,
-        ReplyAgent.from_model(create_chat_model(settings)),
+        ReplyAgent.from_model(create_chat_model_for_user(session, settings)),
     )
 
 

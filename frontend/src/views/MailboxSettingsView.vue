@@ -5,6 +5,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import { automationRuleApi, emailAccountApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
+import SettingsTabs from '@/components/SettingsTabs.vue'
 import { formatDateTime } from '@/utils/format'
 import { syncStatusLabels } from '@/utils/dictionaries'
 import {
@@ -295,6 +296,8 @@ onMounted(() => {
 
 <template>
   <div class="page-shell settings-page">
+    <SettingsTabs />
+
     <div class="settings-intro">
       <div>
         <h2>邮箱账户</h2>
@@ -457,13 +460,6 @@ onMounted(() => {
         暂未配置自动归档规则。
       </p>
     </section>
-
-    <aside class="security-note">
-      <strong>凭据安全</strong>
-      <p>
-        授权码提交给后端后会立即加密保存，页面和账户接口都不会再次显示它。发送邮件仍需人工审核。
-      </p>
-    </aside>
 
     <ElDialog v-model="createVisible" title="添加邮箱账户" width="min(720px, 94vw)">
       <ElForm ref="formRef" :model="form" :rules="rules" label-position="top">
@@ -876,24 +872,6 @@ onMounted(() => {
 .automation-row span {
   color: var(--jm-text-tertiary);
   font-size: 11px;
-}
-
-.security-note {
-  margin-top: 14px;
-  padding: 13px 15px;
-  color: var(--jm-text-secondary);
-  background: #eef3f5;
-  border-radius: 7px;
-}
-
-.security-note strong {
-  font-size: 12px;
-}
-
-.security-note p {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
 }
 
 .form-grid {

@@ -22,6 +22,10 @@ import type {
   JobApplicationReopen,
   JobApplicationStageTransition,
   InterviewTaskWithdrawApplication,
+  LlmConfig,
+  LlmConfigCreate,
+  LlmConfigTestResult,
+  LlmConfigUpdate,
   Page,
   ReviewDecisionResponse,
   Reminder,
@@ -253,5 +257,23 @@ export const automationRuleApi = {
   execute: (id: number) =>
     http
       .post<AutomationRuleExecuteResponse>(`/automation-rules/${id}/execute`)
+      .then(({ data }) => data),
+}
+
+export const llmConfigApi = {
+  list: () => http.get<LlmConfig[]>('/llm-configs').then(({ data }) => data),
+  create: (payload: LlmConfigCreate) =>
+    http.post<LlmConfig>('/llm-configs', payload).then(({ data }) => data),
+  update: (id: number, payload: LlmConfigUpdate) =>
+    http.patch<LlmConfig>(`/llm-configs/${id}`, payload).then(({ data }) => data),
+  remove: (id: number) =>
+    http.delete<void>(`/llm-configs/${id}`).then(({ data }) => data),
+  setActive: (id: number, is_active: boolean) =>
+    http
+      .patch<LlmConfig>(`/llm-configs/${id}/active`, { is_active })
+      .then(({ data }) => data),
+  test: (id: number, api_key?: string) =>
+    http
+      .post<LlmConfigTestResult>(`/llm-configs/${id}/test`, { api_key })
       .then(({ data }) => data),
 }

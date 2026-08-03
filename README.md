@@ -77,9 +77,9 @@ python -m pip install -e ".[dev]"
 
 # 复制并编辑环境变量
 cp .env.example .env
-# 编辑 .env，至少修改以下两项：
+# 编辑 .env，至少修改以下一项：
 #   JOB_MAIL_DATABASE_URL  → 你的 MySQL 连接串
-#   JOB_MAIL_LLM_API_KEY   → 你的 DeepSeek API Key
+#   JOB_MAIL_LLM_API_KEY   → 可选；DeepSeek API Key 也可启动后在「设置 > AI 模型」页面填写
 
 # 初始化数据库（自动建表）
 alembic upgrade head
@@ -108,7 +108,7 @@ npm run dev
 | `JOB_MAIL_DATABASE_URL` | MySQL 连接串 | `mysql+pymysql://job_mail:...@127.0.0.1:3306/job_mail_agent` |
 | `JOB_MAIL_LLM_PROVIDER` | LLM 供应商（当前支持 `deepseek`） | `deepseek` |
 | `JOB_MAIL_LLM_MODEL` | 模型名称 | `deepseek-chat` |
-| `JOB_MAIL_LLM_API_KEY` | LLM API Key | —（必填） |
+| `JOB_MAIL_LLM_API_KEY` | LLM API Key（可改用界面配置：设置 > AI 模型） | —（可选） |
 | `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY` | Checkpoint 加密密钥（AES-256 十六进制） | —（必填） |
 | `JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY` | 邮箱授权码加密密钥 | —（必填） |
 | `JOB_MAIL_AUTOMATION_ENABLED` | 启用自动同步轮询 | `true` |

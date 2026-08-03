@@ -425,3 +425,42 @@ export interface WorkflowRun {
   created_at: string
   updated_at: string
 }
+
+export interface LlmConfig {
+  id: number
+  provider: string
+  model: string
+  base_url: string | null
+  temperature: number
+  timeout_seconds: number
+  max_retries: number
+  is_active: boolean
+  api_key_configured: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LlmConfigCreate {
+  model: string
+  api_key?: string
+  base_url?: string | null
+  temperature?: number
+  timeout_seconds?: number
+  max_retries?: number
+  is_active?: boolean
+}
+
+export interface LlmConfigUpdate {
+  model?: string
+  api_key?: string
+  base_url?: string | null
+  temperature?: number
+  timeout_seconds?: number
+  max_retries?: number
+}
+
+export interface LlmConfigTestResult {
+  success: boolean
+  message: string
+  latency_ms: number | null
+}

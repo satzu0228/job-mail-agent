@@ -40,6 +40,12 @@ const router = createRouter({
           component: () => import('@/views/MailboxSettingsView.vue'),
           meta: { title: '邮箱设置' },
         },
+        {
+          path: 'settings/llm',
+          name: 'llm-settings',
+          component: () => import('@/views/LlmSettingsView.vue'),
+          meta: { title: 'AI 模型配置' },
+        },
       ],
     },
   ],

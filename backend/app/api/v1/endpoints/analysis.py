@@ -8,10 +8,10 @@ from app.agents.classification.schemas import ClassificationOutput
 from app.agents.extraction.agent import ExtractionAgent
 from app.agents.extraction.schemas import ExtractionOutput
 from app.application.email_analysis import SingleEmailAnalysisService
+from app.application.llm_config import create_chat_model_for_user
 from app.application.schemas import EmailAnalyzeResponse
 from app.core.config import Settings, get_settings
 from app.infrastructure.db.session import get_db_session
-from app.infrastructure.llm import create_chat_model
 
 router = APIRouter()
 SessionDependency = Annotated[Session, Depends(get_db_session)]
@@ -22,7 +22,7 @@ def analysis_service(
     session: SessionDependency,
     settings: SettingsDependency,
 ) -> SingleEmailAnalysisService:
-    model = create_chat_model(settings)
+    model = create_chat_model_for_user(session, settings)
     return SingleEmailAnalysisService.from_agents(
         session,
         settings.demo_user_id,

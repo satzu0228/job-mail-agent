@@ -114,13 +114,13 @@ onBeforeUnmount(() => {
       <div class="sidebar-footer">
         <button
           class="nav-item"
-          :class="{ active: activePath === '/settings/mailboxes' }"
-          :title="collapsed ? '邮箱设置' : undefined"
+          :class="{ active: activePath.startsWith('/settings') }"
+          :title="collapsed ? '设置' : undefined"
           type="button"
           @click="navigate('/settings/mailboxes')"
         >
           <ElIcon :size="18"><Setting /></ElIcon>
-          <span v-if="!collapsed">邮箱设置</span>
+          <span v-if="!collapsed">设置</span>
         </button>
         <button
           class="collapse-button"
