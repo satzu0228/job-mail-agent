@@ -283,15 +283,17 @@ onMounted(loadData)
         </div>
         <span class="summary-text">{{ confirmedCount }} 项已确认 · {{ pendingCount }} 项待确认</span>
       </div>
-      <ElSelect v-model="statusFilter" clearable placeholder="全部状态" class="status-filter">
-        <ElOption
-          v-for="(meta, value) in taskStatusMeta"
-          :key="value"
-          :label="meta.label"
-          :value="value"
-        />
-      </ElSelect>
-      <ElButton type="primary" :icon="Plus" @click="openCreateTask">新建日程</ElButton>
+      <div class="toolbar-group">
+        <ElSelect v-model="statusFilter" clearable placeholder="全部状态" class="status-filter">
+          <ElOption
+            v-for="(meta, value) in taskStatusMeta"
+            :key="value"
+            :label="meta.label"
+            :value="value"
+          />
+        </ElSelect>
+        <ElButton type="primary" :icon="Plus" @click="openCreateTask">新建日程</ElButton>
+      </div>
     </div>
 
     <section v-if="reminders.length" class="reminder-strip">

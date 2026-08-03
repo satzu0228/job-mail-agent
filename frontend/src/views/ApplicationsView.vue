@@ -581,7 +581,12 @@ async function updateOfferResult() {
 
 function openReopenApplication() {
   if (!selected.value) return
-  reopenForm.target_stage = selected.value.current_stage === 'OFFER' ? 'OFFER' : 'APPLIED'
+  // 仅允许恢复到非终态阶段，优先沿用关闭时的阶段。
+  const reopenable = ['APPLIED', 'ASSESSMENT', 'INTERVIEW', 'OFFER'] as const
+  const stage = selected.value.current_stage
+  reopenForm.target_stage = reopenable.includes(stage as typeof reopenable[number])
+    ? (stage as typeof reopenable[number])
+    : 'APPLIED'
   reopenForm.reason = ''
   reopenVisible.value = true
 }
@@ -818,7 +823,7 @@ onMounted(loadData)
             {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
           </p>
           <ElButton
-            v-if="selected.current_stage !== 'INTERVIEW' && availableStages.length"
+            v-if="selected.status === 'ACTIVE' && selected.current_stage !== 'INTERVIEW' && availableStages.length"
             type="primary"
             plain
             @click="openStageTransition"
@@ -1200,12 +1205,17 @@ onMounted(loadData)
     <ElDialog v-model="reopenVisible" title="重新打开申请" width="min(520px, 92vw)">
       <ElForm label-position="top">
         <ElFormItem label="恢复到阶段" required>
-          <ElSelect v-model="reopenForm.target_stage" class="full-width">
-            <ElOption label="已投递" value="APPLIED" />
-            <ElOption label="笔试" value="ASSESSMENT" />
-            <ElOption label="面试" value="INTERVIEW" />
-            <ElOption label="录用" value="OFFER" />
+          <ElSelect v-model="reopenForm.target_stage" class="full-width" disabled>
+            <ElOption
+              v-for="(label, value) in stageMeta"
+              :key="value"
+              :label="label.label"
+              :value="value"
+            />
           </ElSelect>
+          <span class="quiet" style="font-size:11px;margin-top:4px;display:block">
+            重新打开将恢复到关闭前的阶段，历史面试结果和邮件关联不受影响
+          </span>
         </ElFormItem>
         <ElFormItem label="重新打开原因" required>
           <ElInput

@@ -798,3 +798,22 @@ class LlmConfigTestResult(ApiSchema):
     success: bool
     message: str
     latency_ms: int | None = None
+
+
+# ------------------------------------------------------------------
+# Dashboard
+# ------------------------------------------------------------------
+
+
+class DashboardStats(ApiSchema):
+    applied: int = Field(ge=0)
+    in_progress: int = Field(ge=0)
+    offered: int = Field(ge=0)
+    rejected: int = Field(ge=0)
+
+
+class DashboardRead(UtcResponseSchema):
+    upcoming_interviews: list[TaskRead]
+    urgent_deadlines: list[TaskRead]
+    pending_reviews: list[ReviewTaskRead]
+    stats: DashboardStats

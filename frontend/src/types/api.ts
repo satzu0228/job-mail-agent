@@ -465,3 +465,21 @@ export interface LlmConfigTestResult {
   message: string
   latency_ms: number | null
 }
+
+// ------------------------------------------------------------------
+// Dashboard
+// ------------------------------------------------------------------
+
+export interface DashboardStats {
+  applied: number
+  in_progress: number
+  offered: number
+  rejected: number
+}
+
+export interface DashboardData {
+  upcoming_interviews: Task[]
+  urgent_deadlines: Task[]
+  pending_reviews: ReviewTask[]
+  stats: DashboardStats
+}

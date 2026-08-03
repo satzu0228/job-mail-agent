@@ -4,6 +4,7 @@ import type {
   AutomationRule,
   AutomationRuleCreate,
   AutomationRuleExecuteResponse,
+  DashboardData,
   EmailAccount,
   EmailAccountCreate,
   EmailConnectionTestResult,
@@ -258,6 +259,11 @@ export const automationRuleApi = {
     http
       .post<AutomationRuleExecuteResponse>(`/automation-rules/${id}/execute`)
       .then(({ data }) => data),
+}
+
+export const dashboardApi = {
+  get: () =>
+    http.get<DashboardData>('/dashboard').then(({ data }) => data),
 }
 
 export const llmConfigApi = {

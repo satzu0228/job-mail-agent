@@ -649,12 +649,19 @@ class JobMailWorkflowService:
         """返回图恢复后真正等待用户处理的下一项审核。"""
         pending_id = workflow.pending_review_task_id
         if (
-            response.follow_up_review_task is not None
-            or workflow.status is not WorkflowRunStatus.WAITING_REVIEW
+            workflow.status is not WorkflowRunStatus.WAITING_REVIEW
             or not pending_id
             or pending_id == response.review_task.id
         ):
             return response
+
+        # 如果已有 follow_up 且与当前等待的一致，无需更新。
+        if (
+            response.follow_up_review_task is not None
+            and response.follow_up_review_task.id == pending_id
+        ):
+            return response
+
         return response.model_copy(
             update={
                 "follow_up_review_task": ReviewTaskRead.model_validate(

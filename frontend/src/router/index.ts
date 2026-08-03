@@ -9,7 +9,12 @@ const router = createRouter({
       path: '/',
       component: AppLayout,
       children: [
-        { path: '', redirect: '/mail' },
+        {
+          path: '',
+          name: 'dashboard',
+          component: () => import('@/views/DashboardView.vue'),
+          meta: { title: '首页' },
+        },
         {
           path: 'mail/:emailId?',
           name: 'mail',

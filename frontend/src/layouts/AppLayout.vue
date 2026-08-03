@@ -4,6 +4,7 @@ import {
   Checked,
   Expand,
   Fold,
+  HomeFilled,
   Message,
   Setting,
   Tickets,
@@ -13,6 +14,7 @@ import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { reminderApi, reviewApi } from '@/api'
+import { useNotifications } from '@/composables/useNotifications'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +22,17 @@ const collapsed = ref(false)
 const pendingCount = ref(0)
 const reminderCount = ref(0)
 let pollTimer: number | undefined
+let isFirstPoll = true
+
+const {
+  isSupported: notificationSupported,
+  permission: notificationPermission,
+  seenReminderIds,
+  seenReviewTaskIds,
+  requestPermission: requestNotificationPermission,
+  notifyNewReminders,
+  notifyNewReviews,
+} = useNotifications()
 
 interface NavItem {
   path: string
@@ -29,6 +42,7 @@ interface NavItem {
 }
 
 const navItems = computed<NavItem[]>(() => [
+  { path: '/', label: '首页', icon: HomeFilled },
   { path: '/mail', label: '邮件', icon: Message },
   { path: '/applications', label: '求职进度', icon: Tickets },
   { path: '/calendar', label: '日程', icon: Calendar },
@@ -36,6 +50,7 @@ const navItems = computed<NavItem[]>(() => [
 ])
 
 const activePath = computed(() => {
+  if (route.path === '/') return '/'
   if (route.path.startsWith('/mail')) return '/mail'
   if (route.path.startsWith('/applications')) return '/applications'
   if (route.path.startsWith('/calendar')) return '/calendar'
@@ -51,8 +66,26 @@ async function loadPendingCount() {
       reviewApi.list(),
       reminderApi.list(true),
     ])
-    pendingCount.value = tasks.filter((task) => task.status === 'PENDING').length
+    const pendingReviews = tasks.filter((task) => task.status === 'PENDING')
+    pendingCount.value = pendingReviews.length
     reminderCount.value = reminders.length
+
+    // 首次加载不触发通知，仅后续轮询检测增量。
+    if (!isFirstPoll) {
+      const newReminders = reminders.filter(
+        (r) => !seenReminderIds.value.has(r.id),
+      )
+      const newReviews = pendingReviews.filter(
+        (t) => !seenReviewTaskIds.value.has(t.id),
+      )
+      if (newReminders.length > 0) notifyNewReminders(newReminders)
+      if (newReviews.length > 0) notifyNewReviews(newReviews)
+    }
+    isFirstPoll = false
+
+    // 更新去重集合。
+    for (const r of reminders) seenReminderIds.value.add(r.id)
+    for (const t of pendingReviews) seenReviewTaskIds.value.add(t.id)
   } catch {
     pendingCount.value = 0
     reminderCount.value = 0
@@ -136,19 +169,30 @@ onBeforeUnmount(() => {
     <section class="app-main">
       <header class="topbar">
         <h1>{{ pageTitle }}</h1>
-        <button
-          v-if="reminderCount"
-          class="review-reminder"
-          type="button"
-          @click="navigate('/calendar')"
-        >
-          <span class="status-dot" />
-          <span>{{ reminderCount }} 项日程提醒</span>
-        </button>
-        <button class="review-reminder" type="button" @click="navigate('/reviews')">
-          <span class="status-dot" :class="{ quiet: pendingCount === 0 }" />
-          <span>{{ pendingCount ? `${pendingCount} 项待审核` : '暂无待审核' }}</span>
-        </button>
+        <div class="topbar-actions">
+          <button
+            v-if="notificationSupported && notificationPermission !== 'granted'"
+            class="review-reminder"
+            type="button"
+            @click="requestNotificationPermission"
+          >
+            <span class="status-dot" style="background: var(--jm-primary)" />
+            <span>开启桌面通知</span>
+          </button>
+          <button
+            v-if="reminderCount"
+            class="review-reminder"
+            type="button"
+            @click="navigate('/calendar')"
+          >
+            <span class="status-dot" />
+            <span>{{ reminderCount }} 项日程提醒</span>
+          </button>
+          <button class="review-reminder" type="button" @click="navigate('/reviews')">
+            <span class="status-dot" :class="{ quiet: pendingCount === 0 }" />
+            <span>{{ pendingCount ? `${pendingCount} 项待审核` : '暂无待审核' }}</span>
+          </button>
+        </div>
       </header>
       <main class="content-area">
         <RouterView />
@@ -366,6 +410,12 @@ onBeforeUnmount(() => {
   padding: 0 24px;
   background: #fff;
   border-bottom: 1px solid var(--jm-border-light);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .topbar h1 {

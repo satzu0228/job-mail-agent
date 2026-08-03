@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.application.automation_rules import AutomationRuleService
 from app.application.email_access import EmailAccessService, EmailSyncError
 from app.application.reminders import ReminderService
+from app.application.task_auto_creation import TaskAutoCreationService
 from app.infrastructure.db.models import AutomationRule
 from app.infrastructure.db.models.email_account import EmailAccount
 
@@ -23,6 +24,7 @@ class AutomationCycleResult:
     failed_accounts: dict[int, str] = field(default_factory=dict)
     failed_workflows: dict[int, str] = field(default_factory=dict)
     reminder_ids: list[int] = field(default_factory=list)
+    created_task_ids: list[int] = field(default_factory=list)
     archive_review_task_ids: list[str] = field(default_factory=list)
     failed_rules: dict[int, str] = field(default_factory=dict)
 
@@ -46,6 +48,7 @@ class AutomationService:
     def run_cycle(self, *, now: datetime | None = None) -> AutomationCycleResult:
         current = now or _utc_now()
         reminder_ids = self._generate_reminders(current)
+        task_ids = self._create_tasks_from_analyses()
         account_ids = self._claim_due_accounts(current)
         synced: list[int] = []
         created_email_ids: list[int] = []
@@ -83,6 +86,7 @@ class AutomationService:
             failed_accounts=failed_accounts,
             failed_workflows=failed_workflows,
             reminder_ids=reminder_ids,
+            created_task_ids=task_ids,
             archive_review_task_ids=archive_review_task_ids,
             failed_rules=failed_rules,
         )
@@ -131,6 +135,13 @@ class AutomationService:
                 lead_minutes=self._reminder_lead_minutes,
             )
             return [item.id for item in reminders]
+
+    def _create_tasks_from_analyses(self) -> list[int]:
+        with self._session_factory() as session:
+            tasks = TaskAutoCreationService(
+                session, self._user_id,
+            ).create_tasks_from_analyses()
+            return [task.id for task in tasks]
 
     def _run_enabled_archive_rules(self) -> tuple[list[str], dict[int, str]]:
         created: list[str] = []

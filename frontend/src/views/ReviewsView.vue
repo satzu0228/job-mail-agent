@@ -298,12 +298,15 @@ async function decide(
       } else {
         ElMessage.info('工作流已进入下一项审核')
       }
-      await loadData()
+      // 先切换到 follow_up 任务再刷新，避免 loadData 根据旧路由打开原任务
       openTask(response.follow_up_review_task)
+      await loadData()
+      window.dispatchEvent(new Event('job-mail:data-poll'))
     } else {
       drawerVisible.value = false
       await router.replace('/reviews')
       await loadData()
+      window.dispatchEvent(new Event('job-mail:data-poll'))
     }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -322,6 +325,10 @@ async function batchApprove() {
   const nonSendReplyCount = pendingTasks.filter(
     (task) => task.action_type !== 'SEND_REPLY',
   ).length
+  if (nonSendReplyCount === 0) {
+    ElMessage.warning('剩余的审核均为发送回复，需逐项人工确认')
+    return
+  }
   try {
     await ElMessageBox.confirm(
       nonSendReplyCount > 1
@@ -379,8 +386,8 @@ async function batchApprove() {
       if (response.follow_up_review_task.action_type === 'SEND_REPLY') {
         ElMessage.info('工作流已进入回复确认环节，请检查回复内容')
       }
-      await loadData()
       openTask(response.follow_up_review_task)
+      await loadData()
     } else {
       await loadData()
     }
