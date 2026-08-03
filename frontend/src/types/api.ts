@@ -119,6 +119,7 @@ export interface EmailListItem {
   received_at: string | null
   parse_status: 'PENDING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED'
   archive_status: 'NONE' | 'PROPOSED' | 'ARCHIVED' | 'RESTORED' | 'FAILED'
+  has_analysis: boolean
 }
 
 export interface EmailAnalysis {

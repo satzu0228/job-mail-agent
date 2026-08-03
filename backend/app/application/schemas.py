@@ -174,6 +174,7 @@ class EmailListItem(UtcResponseSchema):
     received_at: datetime | None
     parse_status: EmailParseStatus
     archive_status: ArchiveStatus
+    has_analysis: bool
 
 
 class EmailAnalysisRead(UtcResponseSchema):

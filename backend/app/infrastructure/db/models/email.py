@@ -127,6 +127,10 @@ class Email(TimestampMixin, Base):
         )
 
     @property
+    def has_analysis(self) -> bool:
+        return self.current_analysis is not None
+
+    @property
     def direction(self) -> EmailDirection:
         account_address = self.account.email_address if self.account is not None else ""
         return (

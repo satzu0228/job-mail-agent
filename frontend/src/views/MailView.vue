@@ -280,6 +280,15 @@ async function startWorkflow() {
   try {
     workflow.value = await emailApi.startWorkflow(selectedEmail.value.id)
     selectedEmail.value = await emailApi.detail(selectedEmail.value.id)
+    // 同步更新左侧列表中对应邮件的状态
+    const idx = emails.value.findIndex((e) => e.id === selectedEmail.value!.id)
+    if (idx !== -1) {
+      emails.value[idx] = {
+        ...emails.value[idx],
+        application_id: selectedEmail.value.application_id,
+        has_analysis: selectedEmail.value.current_analysis !== null,
+      }
+    }
     if (workflow.value.pending_review_task_id) {
       ElMessage.success('智能处理已暂停，等待你的审核')
     } else if (workflow.value.status === 'SUCCEEDED') {
@@ -497,6 +506,7 @@ onUnmounted(() => {
             <span v-if="email.application_id" class="linked-mark">
               <ElIcon><Link /></ElIcon> 已关联
             </span>
+            <span v-else-if="email.has_analysis">已分析</span>
             <span v-else>待处理</span>
             <span v-if="email.parse_status !== 'SUCCEEDED'" class="parse-warning">
               {{ email.parse_status === 'FAILED' ? '解析失败' : '解析不完整' }}
