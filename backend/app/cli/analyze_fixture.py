@@ -14,7 +14,21 @@ from app.infrastructure.llm import LLMConfigurationError, create_chat_model
 
 def analyze_fixture(path: Path) -> dict[str, Any]:
     email = PreparedEmail.model_validate_json(path.read_text(encoding="utf-8"))
-    model = create_chat_model(get_settings())
+    settings = get_settings()
+    if settings.llm_api_key is None:
+        raise LLMConfigurationError(
+            "CLI 工具需要通过 JOB_MAIL_LLM_API_KEY 或 DEEPSEEK_API_KEY 环境变量提供 API Key"
+        )
+    llm_config = {
+        "provider": settings.llm_provider,
+        "model": settings.llm_model,
+        "api_key": settings.llm_api_key.get_secret_value(),
+        "base_url": None,
+        "temperature": settings.llm_temperature,
+        "timeout_seconds": settings.llm_timeout_seconds,
+        "max_retries": settings.llm_max_retries,
+    }
+    model = create_chat_model(settings, llm_config)
 
     classification = ClassificationAgent.from_model(model).run(
         ClassificationInput(email=email)

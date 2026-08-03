@@ -144,27 +144,16 @@ class LlmConfigService:
     ) -> dict[str, Any]:
         """返回用于创建聊天模型的完整配置。
 
-        优先级：数据库中的活跃配置 > 环境变量；都没有则抛出异常。
+        仅从数据库中的活跃配置读取 API Key；未配置时抛出异常引导用户前往设置页面。
         """
         active = self._configs.get_active()
-        if active is not None:
-            api_key = self._credential_resolver.resolve(active.api_key_ciphertext)
-            return self._to_runtime_config(active, api_key=api_key)
-
-        settings = settings or get_settings()
-        if settings.llm_api_key is None:
+        if active is None:
             raise LLMConfigurationError(
-                "未配置 AI 模型 API Key：请在设置页填写，或配置 JOB_MAIL_LLM_API_KEY 环境变量"
+                "未配置 AI 模型 API Key，请前往「设置 > AI 模型」页面添加 DeepSeek API Key"
             )
-        return {
-            "provider": settings.llm_provider,
-            "model": settings.llm_model,
-            "api_key": settings.llm_api_key.get_secret_value(),
-            "base_url": None,
-            "temperature": settings.llm_temperature,
-            "timeout_seconds": settings.llm_timeout_seconds,
-            "max_retries": settings.llm_max_retries,
-        }
+
+        api_key = self._credential_resolver.resolve(active.api_key_ciphertext)
+        return self._to_runtime_config(active, api_key=api_key)
 
     @staticmethod
     def _to_runtime_config(

@@ -169,9 +169,10 @@ def test_resolve_effective_config_uses_active_db_config() -> None:
     assert resolved["max_retries"] == 1
 
 
-def test_resolve_effective_config_falls_back_to_environment(
+def test_resolve_effective_config_requires_db_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """无活跃数据库配置时直接报错，不再回退到环境变量。"""
     monkeypatch.setenv("JOB_MAIL_LLM_API_KEY", "sk-env-key")
     service = _service(FakeConfigs())
     settings = Settings(
@@ -183,11 +184,9 @@ def test_resolve_effective_config_falls_back_to_environment(
         llm_max_retries=2,
     )
 
-    resolved = service.resolve_effective_config(settings)
-
-    assert resolved["api_key"] == "sk-env-key"
-    assert resolved["model"] == "deepseek-chat"
-    assert resolved["base_url"] is None
+    with pytest.raises(LLMConfigurationError) as exc:
+        service.resolve_effective_config(settings)
+    assert "设置" in str(exc.value)
 
 
 def test_resolve_effective_config_raises_when_nothing_configured(

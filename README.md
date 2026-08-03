@@ -11,7 +11,7 @@
 | 📬 **邮件同步** | 通过 IMAP 连接邮箱，自动同步邮件并解析正文 |
 | 🤖 **智能分类与抽取** | LLM 自动识别邮件类型（面试/Offer/拒信等），抽取公司、岗位、时间、地点、会议链接等结构化信息 |
 | 🔗 **求职申请匹配** | 将邮件自动关联到对应的求职申请，或建议新建申请 |
-| 📅 **面试日程** | 自动提取面试时间并创建日程，支持到期前提醒 |
+| 📅 **面试日程** | 自动提取面试时间并创建日程，页面内展示即将到期的提醒 |
 | ✍️ **回复草稿** | LLM 根据邮件内容生成回复草稿，人工确认后通过 SMTP 发送 |
 | 👀 **人工审核** | 所有高风险操作（关联申请、阶段变更、日程创建、回复发送）均需人工批准后才执行 |
 | ⚡ **一键批准** | 批准首项审核后自动执行后续低风险操作，只在发送回复时暂停确认 |
@@ -61,6 +61,7 @@
 - **Node.js** 18+
 - **MySQL** 8.0+
 - **DeepSeek API Key**（[platform.deepseek.com](https://platform.deepseek.com) 获取）
+- **邮箱账号**：支持 IMAP 收件 + SMTP 发件（QQ 邮箱、163、Gmail 等均可）
 
 ### 1. 克隆项目
 
@@ -69,29 +70,60 @@ git clone https://github.com/satzu0228/job-mail-agent.git
 cd job-mail-agent
 ```
 
-### 2. 配置后端
+### 2. 创建 MySQL 数据库
+
+登录 MySQL 并执行：
+
+```sql
+CREATE DATABASE job_mail_agent CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'job_mail'@'127.0.0.1' IDENTIFIED BY '你的密码';
+GRANT ALL PRIVILEGES ON job_mail_agent.* TO 'job_mail'@'127.0.0.1';
+FLUSH PRIVILEGES;
+```
+
+### 3. 配置后端
 
 ```bash
 cd backend
 python -m pip install -e ".[dev]"
 
-# 复制并编辑环境变量
+# 复制环境变量模板
 cp .env.example .env
-# 编辑 .env，至少修改以下一项：
-#   JOB_MAIL_DATABASE_URL  → 你的 MySQL 连接串
-#   JOB_MAIL_LLM_API_KEY   → 可选；DeepSeek API Key 也可启动后在「设置 > AI 模型」页面填写
+```
 
-# 初始化数据库（自动建表）
+编辑 `.env`，修改以下配置项：
+
+```bash
+# ① 数据库连接（必填）—— 替换为第 2 步设置的密码
+JOB_MAIL_DATABASE_URL=mysql+pymysql://job_mail:你的密码@127.0.0.1:3306/job_mail_agent?charset=utf8mb4
+
+# ② 加密密钥（必填）—— 用以下命令生成两对密钥：
+#    python -c "import secrets; print(secrets.token_hex(16))"
+JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY=   # 填入生成的 32 位十六进制字符串
+JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY=  # 填入另一对生成的密钥
+```
+
+生成加密密钥的命令（在终端执行）：
+
+```bash
+python -c "import secrets; print(secrets.token_hex(16))"
+```
+
+> 执行两次，分别填入 `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY` 和 `JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY`。**请勿使用示例中的 "replace-with-…" 值，务必生成自己的密钥。**
+
+初始化数据库表：
+
+```bash
 alembic upgrade head
 ```
 
-### 3. 启动后端
+### 4. 启动后端
 
 ```bash
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 4. 启动前端
+### 5. 启动前端
 
 ```bash
 cd frontend
@@ -99,22 +131,44 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:5173`，在「邮箱设置」页面添加邮箱账户，系统将自动开始同步。
+### 6. 添加邮箱
+
+1. 打开 `http://localhost:5173`
+2. 进入「设置>邮箱账户」页面，添加邮箱账户
+3. 填写 IMAP/SMTP 服务器信息和**邮箱授权码**
+
+> **关于邮箱授权码**：主流邮箱（QQ、163、Gmail）出于安全考虑，不允许直接用登录密码连接第三方客户端。你需要在邮箱设置中单独生成一个"授权码"（或称应用专用密码）：
+
+### 7. 配置 AI 模型
+
+1. 进入「设置 > AI 模型」页面
+2. 点击「添加配置」，粘贴从 [platform.deepseek.com](https://platform.deepseek.com) 获取的 **DeepSeek API Key**
+3. 系统会自动测试连接，通过后启用该配置
+
+> **关于用户系统**：当前为个人使用设计，采用单用户模式（默认 `demo_user_id=1`）。无需注册或登录——启动后即可以该用户身份使用全部功能。
+
+添加邮箱并配置 API Key 后，系统将自动开始同步邮件。
 
 ## 配置说明
 
+以下为常用配置项，完整列表见 `.env.example`。
+
+### 必填
+
+| 环境变量 | 说明 |
+|---------|------|
+| `JOB_MAIL_DATABASE_URL` | MySQL 连接串，格式 `mysql+pymysql://用户:密码@主机:端口/库名` |
+| `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY` | LangGraph 状态加密密钥（16 字节，32 位十六进制） |
+| `JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY` | 邮箱授权码存储加密密钥（16 字节，32 位十六进制） |
+
+### 可选
+
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
-| `JOB_MAIL_DATABASE_URL` | MySQL 连接串 | `mysql+pymysql://job_mail:...@127.0.0.1:3306/job_mail_agent` |
-| `JOB_MAIL_LLM_PROVIDER` | LLM 供应商（当前支持 `deepseek`） | `deepseek` |
-| `JOB_MAIL_LLM_MODEL` | 模型名称 | `deepseek-chat` |
-| `JOB_MAIL_LLM_API_KEY` | LLM API Key（可改用界面配置：设置 > AI 模型） | —（可选） |
-| `JOB_MAIL_CHECKPOINT_ENCRYPTION_KEY` | Checkpoint 加密密钥（AES-256 十六进制） | —（必填） |
-| `JOB_MAIL_EMAIL_CREDENTIAL_ENCRYPTION_KEY` | 邮箱授权码加密密钥 | —（必填） |
-| `JOB_MAIL_AUTOMATION_ENABLED` | 启用自动同步轮询 | `true` |
-| `JOB_MAIL_AUTOMATION_POLL_SECONDS` | 轮询间隔（秒） | `30` |
+| `JOB_MAIL_REMINDER_LEAD_MINUTES` | 日程提前多久生成提醒（分钟） | `60` |
+| `JOB_MAIL_DEMO_USER_ID` | 单用户模式的用户 ID | `1` |
 
-完整配置项见 `.env.example`。
+> **LLM 参数、邮箱自动同步等均在页面配置**，无需通过环境变量设置。
 
 ## 使用流程
 
