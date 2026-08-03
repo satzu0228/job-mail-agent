@@ -6,9 +6,11 @@
 *.key
 secrets/
 
-# Development docs, references, and test artifacts (local only)
+# Development docs, references, experiments (local only)
 docs/
 references/
+experiments/
+AGENTS.md
 
 # Python
 __pycache__/
