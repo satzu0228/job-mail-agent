@@ -6,9 +6,9 @@
 *.key
 secrets/
 
-# Third-party reference repositories
-references/*/
-!references/README.md
+# Development docs, references, and test artifacts (local only)
+docs/
+references/
 
 # Python
 __pycache__/
