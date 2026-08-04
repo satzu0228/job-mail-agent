@@ -65,7 +65,12 @@ from app.infrastructure.db.repositories import (
 class ApplicationRunner(Protocol):
     prompt_version: str
 
-    def run(self, agent_input: ApplicationAgentInput) -> ApplicationAgentOutput: ...
+    def run(
+        self,
+        agent_input: ApplicationAgentInput,
+        *,
+        config: dict[str, object] | None = None,
+    ) -> ApplicationAgentOutput: ...
 
 
 class ApplicationAnalysisUnavailableError(RuntimeError):
@@ -133,7 +138,10 @@ class ApplicationManagementService:
         self._session.rollback()
         model_started = perf_counter()
         try:
-            suggestion = self._agent.run(agent_input)
+            suggestion = self._agent.run(
+                agent_input,
+                config={"configurable": {"user_id": self._user_id}},
+            )
         except Exception as exc:
             if workflow_run_id is not None:
                 model_duration_ms = round((perf_counter() - model_started) * 1000, 2)
@@ -264,6 +272,7 @@ class ApplicationManagementService:
         )
         return ApplicationAnalysisFacts(
             email_id=email.id,
+            email_subject=email.subject,
             category=analysis.category,
             sender_address=email.from_address,
             company_name=analysis.company_name,
@@ -908,6 +917,14 @@ class ReviewTaskService:
             email = self._owned_email(task.source_email_id)
             email.application_id = effective_application.id
             task.application_id = effective_application.id
+
+            # 回填此前由 TaskAutoCreationService 自动创建但尚未关联申请的日程
+            _backfill_task_application(
+                self._session,
+                source_email_id=email.id,
+                application_id=effective_application.id,
+            )
+
             self._session.add(
                 ApplicationEvent(
                     application_id=effective_application.id,
@@ -1001,6 +1018,14 @@ class ReviewTaskService:
             application.status = ApplicationStatus.WITHDRAWN
         else:
             application.status = ApplicationStatus.ACTIVE
+
+        # 离开 ASSESSMENT 阶段时，结算测评类日程
+        if previous is ApplicationStage.ASSESSMENT:
+            self._settle_assessment_tasks(
+                application.id,
+                status=TaskStatus.COMPLETED,
+            )
+
         if previous is ApplicationStage.INTERVIEW:
             if proposed is ApplicationStage.WITHDRAWN:
                 settle_interview_tasks(
@@ -1177,7 +1202,7 @@ class ReviewTaskService:
         source_task: ReviewTask,
         application: JobApplication,
     ) -> ReviewTask | None:
-        """将已确认关联的面试时间转换为独立日程审核，避免模型直接写业务表。"""
+        """将已确认关联的邮件转换为独立日程审核，覆盖面试、材料补充和 Offer 截止。"""
         if source_task.action_type is ReviewActionType.CREATE_TASK:
             return None
         analysis = self._session.scalar(
@@ -1186,13 +1211,26 @@ class ReviewTaskService:
                 EmailAnalysis.workflow_run_id == source_task.workflow_run_id,
             )
         )
-        if (
-            analysis is None
-            or analysis.category is not EmailCategory.INTERVIEW
-            or analysis.event_time is None
-        ):
+        if analysis is None:
             return None
 
+        # 面试日程（现有逻辑）
+        if analysis.category is EmailCategory.INTERVIEW and analysis.event_time is not None:
+            return self._create_interview_task_review(source_task, application, analysis)
+
+        # 材料补充 / Offer 截止期限日程
+        if analysis.category in (EmailCategory.MATERIAL_REQUEST, EmailCategory.OFFER) and analysis.deadline_at is not None:
+            return self._create_deadline_task_review(source_task, application, analysis)
+
+        return None
+
+    def _create_interview_task_review(
+        self,
+        source_task: ReviewTask,
+        application: JobApplication,
+        analysis: EmailAnalysis,
+    ) -> ReviewTask | None:
+        """为 INTERVIEW 邮件创建面试日程审核。"""
         extraction = analysis.extraction_json or {}
         event_time = extraction.get("event_time")
         raw_time_text = (
@@ -1217,6 +1255,38 @@ class ReviewTaskService:
         )
         if existing is not None:
             return existing
+
+        # 去重：检查 Task 表是否已有同邮件+同类型的日程
+        duplicate_task = self._session.scalar(
+            select(Task).where(
+                Task.user_id == self._user_id,
+                Task.source_email_id == source_task.source_email_id,
+                Task.task_type == TaskType.INTERVIEW,
+            ).limit(1)
+        )
+        if duplicate_task is not None:
+            updated = False
+            if duplicate_task.application_id is None:
+                duplicate_task.application_id = application.id
+                updated = True
+            if duplicate_task.interview_round is None:
+                duplicate_task.interview_round = interview_round
+                updated = True
+            if updated:
+                self._session.flush()
+            self._upsert_interview_round(
+                application_id=application.id,
+                round_number=interview_round,
+                result=InterviewResult.PENDING,
+                interview_date=analysis.event_time.astimezone(UTC).replace(tzinfo=None)
+                if analysis.event_time
+                else None,
+                location=location,
+                meeting_url=meeting_url,
+                source=InterviewRoundSource.EMAIL,
+                source_email_id=source_task.source_email_id,
+            )
+            return None
 
         follow_up = ReviewTask(
             id=str(uuid4()),
@@ -1256,6 +1326,88 @@ class ReviewTaskService:
         self._session.flush()
         return follow_up
 
+    def _create_deadline_task_review(
+        self,
+        source_task: ReviewTask,
+        application: JobApplication,
+        analysis: EmailAnalysis,
+    ) -> ReviewTask | None:
+        """为 MATERIAL_REQUEST / OFFER 邮件创建截止期限日程审核。"""
+        extraction = analysis.extraction_json or {}
+        deadline = extraction.get("deadline") or {}
+        raw_time_text = (
+            deadline.get("raw_text")
+            if isinstance(deadline, dict) and isinstance(deadline.get("raw_text"), str)
+            else None
+        )
+        task_type = (
+            TaskType.MATERIAL
+            if analysis.category is EmailCategory.MATERIAL_REQUEST
+            else TaskType.DEADLINE
+        )
+        idempotency_key = f"deadline-task:{analysis.id}:{application.id}"
+        existing = self._session.scalar(
+            select(ReviewTask).where(ReviewTask.idempotency_key == idempotency_key)
+        )
+        if existing is not None:
+            return existing
+
+        # 去重：检查 Task 表是否已有同邮件的日程
+        duplicate_task = self._session.scalar(
+            select(Task).where(
+                Task.user_id == self._user_id,
+                Task.source_email_id == source_task.source_email_id,
+                Task.task_type == task_type,
+            ).limit(1)
+        )
+        if duplicate_task is not None:
+            if duplicate_task.application_id is None:
+                duplicate_task.application_id = application.id
+                self._session.flush()
+            return None
+
+        title = (
+            f"{application.company_name} 材料补充截止"
+            if task_type is TaskType.MATERIAL
+            else f"{application.company_name} Offer 确认截止"
+        )
+        follow_up = ReviewTask(
+            id=str(uuid4()),
+            user_id=self._user_id,
+            workflow_run_id=source_task.workflow_run_id,
+            source_email_id=source_task.source_email_id,
+            application_id=application.id,
+            action_type=ReviewActionType.CREATE_TASK,
+            risk_level=RiskLevel.HIGH,
+            proposed_payload={
+                "schema_version": "task-review.v1",
+                "application_id": application.id,
+                "company_name": application.company_name,
+                "position_name": application.position_name,
+                "source_email_id": source_task.source_email_id,
+                "task_type": task_type.value,
+                "title": title,
+                "description": analysis.summary,
+                "raw_time_text": raw_time_text,
+                "start_at": None,
+                "deadline_at": (
+                    analysis.deadline_at.replace(tzinfo=UTC)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                ),
+                "source_timezone": analysis.source_timezone,
+                "location": None,
+                "meeting_url": None,
+                "source_review_task_id": source_task.id,
+            },
+            status=ReviewTaskStatus.PENDING,
+            idempotency_key=idempotency_key,
+            resource_version=0,
+        )
+        self._session.add(follow_up)
+        self._session.flush()
+        return follow_up
+
     def _infer_interview_round(self, application_id: int, text: str) -> int:
         explicit = _parse_interview_round(text)
         if explicit is not None:
@@ -1270,7 +1422,7 @@ class ReviewTaskService:
 
     def _infer_next_interview_round(self, application_id: int, text: str) -> int:
         """推断新面试的轮次。从文本中取最大轮次号（因为新面试总是最后提及的），
-        如果解析不到，则用已有最大轮次+1。"""
+        如果解析不到，检测是否为改期/调整邮件（复用已有轮次），否则用已有最大轮次+1。"""
         max_parsed = _parse_interview_round_max(text)
         if max_parsed is not None:
             return max_parsed
@@ -1280,6 +1432,9 @@ class ReviewTaskService:
                 Task.task_type == TaskType.INTERVIEW,
             )
         )
+        # 面试时间调整/改期邮件，未提及新轮次时复用已有最近轮次
+        if _is_reschedule(text):
+            return int(latest or 0) or 1
         return int(latest or 0) + 1
 
     def _execute_task(self, review_task: ReviewTask, payload: dict[str, Any]) -> Task:
@@ -1333,6 +1488,24 @@ class ReviewTaskService:
         application.status = ApplicationStatus.ACTIVE
         self._session.flush()
         return task
+
+    def _settle_assessment_tasks(
+        self,
+        application_id: int,
+        status: TaskStatus,
+    ) -> None:
+        """结算指定申请中状态为 PENDING/CONFIRMED 的测评类日程。"""
+        tasks = list(
+            self._session.scalars(
+                select(Task).where(
+                    Task.application_id == application_id,
+                    Task.task_type == TaskType.ASSESSMENT,
+                    Task.status.in_([TaskStatus.PENDING, TaskStatus.CONFIRMED]),
+                )
+            )
+        )
+        for t in tasks:
+            t.status = status
 
     def _upsert_interview_round(
         self,
@@ -1554,6 +1727,18 @@ def _parse_interview_round(text: str) -> int | None:
     return value if 1 <= value <= 20 else None
 
 
+_RESCHEDULE_PATTERNS = re.compile(
+    r"面试时间调整|面试改期|面试时间变更|面试延期|面试提前|"
+    r"reschedule|时间调整|时间变更|面试时间更新",
+    re.IGNORECASE,
+)
+
+
+def _is_reschedule(text: str) -> bool:
+    """检测文本是否描述面试时间调整/改期而非新增面试。"""
+    return bool(_RESCHEDULE_PATTERNS.search(text))
+
+
 def _parse_interview_round_max(text: str) -> int | None:
     """查找文本中提到的所有面试轮次，返回最大值。用于新面试日程创建。"""
     if re.search(r"(?:初面|首面|首轮面试|第一轮面试)", text, re.IGNORECASE):
@@ -1582,6 +1767,24 @@ def _interview_round_label(round_value: int) -> str:
         None,
     )
     return f"{chinese}面" if chinese else f"第 {round_value} 轮面试"
+
+
+def _backfill_task_application(
+    session: Session,
+    *,
+    source_email_id: int,
+    application_id: int,
+) -> None:
+    """回填审核批准前由 TaskAutoCreationService 创建的、尚未关联申请的 Task。"""
+    from sqlalchemy import update as sql_update
+    session.execute(
+        sql_update(Task)
+        .where(
+            Task.source_email_id == source_email_id,
+            Task.application_id.is_(None),
+        )
+        .values(application_id=application_id)
+    )
 
 
 def _extracted_value(payload: Any) -> str | None:

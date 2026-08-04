@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.reply import ReplyAgent
 from app.application.llm_config import create_chat_model_for_user
@@ -24,10 +24,16 @@ def generation_service(
     session: SessionDependency,
     settings: SettingsDependency,
 ) -> ReplyGenerationService:
+    model = create_chat_model_for_user(session, settings)
+    factory = sessionmaker(
+        bind=session.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
     return ReplyGenerationService(
         session,
         settings.demo_user_id,
-        ReplyAgent.from_model(create_chat_model_for_user(session, settings)),
+        ReplyAgent.from_model(model, factory),
     )
 
 

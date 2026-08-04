@@ -9,7 +9,7 @@ from app.agents.application.schemas import ApplicationAgentOutput, ApplicationCa
 from app.agents.classification.schemas import ClassificationOutput
 from app.agents.common.schemas import PreparedEmail
 from app.agents.extraction.schemas import ExtractionOutput
-from app.domain.enums import WorkflowRunStatus
+from app.domain.enums import RequiredCapability, WorkflowRunStatus
 from app.workflows.state import (
     ReviewExecutionOutcome,
     ReviewResumePayload,
@@ -212,7 +212,11 @@ class JobMailGraph:
     def _validate_results(self, state: WorkflowState) -> dict[str, Any]:
         if state.classification is None:
             return self._failure("validate_results", ValueError("缺少分类结果"))
-        if state.classification.is_job_related and state.extraction is None:
+        extraction_required = (
+            RequiredCapability.EXTRACT
+            in state.classification.required_capabilities
+        )
+        if extraction_required and state.extraction is None:
             return self._failure("validate_results", ValueError("求职邮件缺少抽取结果"))
         if not state.classification.is_job_related and state.extraction is not None:
             return self._failure("validate_results", ValueError("非求职邮件存在抽取结果"))
@@ -365,7 +369,12 @@ class JobMailGraph:
         if state.error_code:
             return "fail"
         if state.classification and state.classification.is_job_related:
-            return "extract"
+            if (
+                RequiredCapability.EXTRACT
+                in state.classification.required_capabilities
+            ):
+                return "extract"
+            return "persist"
         return "persist"
 
     @staticmethod

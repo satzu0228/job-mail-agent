@@ -152,6 +152,7 @@ def test_interview_analysis_creates_readable_first_round_task_review() -> None:
                     ),
                     None,
                     None,
+                    None,  # Task table dedup check
                 ]
             )
             self.added: list[object] = []

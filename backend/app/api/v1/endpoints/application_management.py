@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.application.agent import ApplicationAgent
 from app.api.v1.endpoints.workflow import (
@@ -35,10 +35,15 @@ def management_service(
     settings: SettingsDependency,
 ) -> ApplicationManagementService:
     model = create_chat_model_for_user(session, settings)
+    factory = sessionmaker(
+        bind=session.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
     return ApplicationManagementService(
         session,
         settings.demo_user_id,
-        ApplicationAgent.from_model(model),
+        ApplicationAgent.from_model(model, factory),
         model_provider=settings.llm_provider,
         model_name=settings.llm_model,
     )

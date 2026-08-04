@@ -26,7 +26,9 @@ _ALLOWED_TRANSITIONS: frozenset[tuple[ApplicationStage, ApplicationStage]] = fro
     {
         (ApplicationStage.APPLIED, ApplicationStage.ASSESSMENT),
         (ApplicationStage.APPLIED, ApplicationStage.INTERVIEW),
+        (ApplicationStage.APPLIED, ApplicationStage.OFFER),
         (ApplicationStage.ASSESSMENT, ApplicationStage.INTERVIEW),
+        (ApplicationStage.ASSESSMENT, ApplicationStage.OFFER),
         (ApplicationStage.INTERVIEW, ApplicationStage.OFFER),
         (ApplicationStage.APPLIED, ApplicationStage.REJECTED),
         (ApplicationStage.ASSESSMENT, ApplicationStage.REJECTED),

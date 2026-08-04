@@ -19,7 +19,7 @@ from app.agents.extraction.schemas import (
     ExtractionInput,
     ExtractionOutput,
 )
-from app.domain.enums import EmailAnalysisStatus, EmailParseStatus
+from app.domain.enums import EmailAnalysisStatus, EmailParseStatus, RequiredCapability
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.user import User
@@ -228,7 +228,10 @@ def build_email_analysis(
     extraction: ExtractionOutput | None,
     workflow_run_id: str | None = None,
 ) -> EmailAnalysis:
-    if classification.is_job_related and extraction is None:
+    extraction_required = (
+        RequiredCapability.EXTRACT in classification.required_capabilities
+    )
+    if extraction_required and extraction is None:
         raise ValueError("job-related analysis requires extraction output")
     if not classification.is_job_related and extraction is not None:
         raise ValueError("non-job analysis cannot contain extraction output")

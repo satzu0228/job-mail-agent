@@ -291,6 +291,7 @@ async function startWorkflow() {
     }
     if (workflow.value.pending_review_task_id) {
       ElMessage.success('智能处理已暂停，等待你的审核')
+      window.dispatchEvent(new Event('job-mail:refresh-badge'))
     } else if (workflow.value.status === 'SUCCEEDED') {
       ElMessage.success('智能处理已完成')
     }

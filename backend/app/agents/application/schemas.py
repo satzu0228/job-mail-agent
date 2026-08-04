@@ -34,6 +34,7 @@ class ApplicationCandidate(AgentSchema):
 
 class ApplicationAnalysisFacts(AgentSchema):
     email_id: int = Field(gt=0)
+    email_subject: str
     category: EmailCategory
     sender_address: str
     company_name: str | None = None

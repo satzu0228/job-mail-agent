@@ -25,6 +25,9 @@ def make_classification(*, job_related: bool = True) -> ClassificationOutput:
         should_reply=job_related,
         confidence=0.96,
         evidence=[EVIDENCE],
+        required_capabilities=(
+            ["EXTRACT", "MATCH_APPLICATION", "DRAFT_REPLY"] if job_related else []
+        ),
     )
 
 

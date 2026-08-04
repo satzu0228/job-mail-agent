@@ -43,6 +43,10 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# Local database tools (not for commit)
+reset_db.py
+cleanup_test_data.py
+
 # Runtime data
 logs/
 *.log

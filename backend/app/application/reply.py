@@ -63,7 +63,12 @@ from app.infrastructure.security import EncryptedCredentialResolver
 class ReplyRunner(Protocol):
     prompt_version: str
 
-    def run(self, agent_input: ReplyAgentInput) -> ReplyAgentOutput: ...
+    def run(
+        self,
+        agent_input: ReplyAgentInput,
+        *,
+        config: dict[str, object] | None = None,
+    ) -> ReplyAgentOutput: ...
 
 
 class CredentialResolver(Protocol):
@@ -110,7 +115,10 @@ class ReplyGenerationService:
         agent_input = self._agent_input(prepared, email, analysis, user)
         started = perf_counter()
         try:
-            result = self._agent.run(agent_input)
+            result = self._agent.run(
+                agent_input,
+                config={"configurable": {"user_id": self._user_id}},
+            )
         except Exception as exc:
             self._append_trace(
                 workflow,

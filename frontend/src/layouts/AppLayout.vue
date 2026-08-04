@@ -103,13 +103,19 @@ watch(
   () => void loadPendingCount(),
 )
 
+function handleRefreshBadge() {
+  void loadPendingCount()
+}
+
 onMounted(() => {
   void loadPendingCount()
-  pollTimer = window.setInterval(loadPendingCount, 20_000)
+  pollTimer = window.setInterval(loadPendingCount, 5_000)
+  window.addEventListener('job-mail:refresh-badge', handleRefreshBadge)
 })
 
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
+  window.removeEventListener('job-mail:refresh-badge', handleRefreshBadge)
 })
 </script>
 

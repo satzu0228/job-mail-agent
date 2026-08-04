@@ -129,8 +129,8 @@ const interviewResultOptions: Array<{
 ]
 
 const allowedStageTransitions: Record<ApplicationStage, ApplicationStage[]> = {
-  APPLIED: ['ASSESSMENT', 'INTERVIEW', 'REJECTED', 'WITHDRAWN'],
-  ASSESSMENT: ['INTERVIEW', 'REJECTED', 'WITHDRAWN'],
+  APPLIED: ['ASSESSMENT', 'INTERVIEW', 'OFFER', 'REJECTED', 'WITHDRAWN'],
+  ASSESSMENT: ['INTERVIEW', 'OFFER', 'REJECTED', 'WITHDRAWN'],
   INTERVIEW: ['OFFER', 'REJECTED', 'WITHDRAWN'],
   OFFER: ['WITHDRAWN'],
   REJECTED: [],

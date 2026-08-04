@@ -63,8 +63,13 @@ class TaskAutoCreationService:
                 seen_email_ids.add(analysis.email_id)
                 continue
 
-            # 如果已有待审核的 CREATE_TASK / UPDATE_TASK，交给审核流程处理。
+            # 如果已有待审核任务，交给审核流程处理。
             if self._has_pending_review(analysis.email_id):
+                seen_email_ids.add(analysis.email_id)
+                continue
+
+            # 面试时间调整/改期邮件不自动创建日程——更新已有日程的逻辑在审核流中处理
+            if _is_reschedule_event(analysis):
                 seen_email_ids.add(analysis.email_id)
                 continue
 
@@ -143,14 +148,14 @@ class TaskAutoCreationService:
         )
 
     def _has_pending_review(self, source_email_id: int) -> bool:
+        """同邮件存在未完成的审核任务时跳过自动创建，避免：
+        - 邮件尚未关联申请（application_id 为空）
+        - 与审核流程中的 _create_task_follow_up 重复创建"""
         return (
             self._session.scalar(
                 select(ReviewTask.id).where(
                     ReviewTask.source_email_id == source_email_id,
                     ReviewTask.status == ReviewTaskStatus.PENDING,
-                    ReviewTask.action_type.in_(
-                        [ReviewActionType.CREATE_TASK, ReviewActionType.UPDATE_TASK]
-                    ),
                 ).limit(1)
             )
             is not None
@@ -253,3 +258,26 @@ def _build_title(analysis: EmailAnalysis, task_type: TaskType) -> str:
     if company:
         return f"{company} 日程提醒"
     return "日程提醒"
+
+
+# ------------------------------------------------------------------
+# 改期检测（与 application_management._is_reschedule 保持一致）
+# ------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+
+_RESCHEDULE_RE = _re.compile(
+    r"面试时间调整|面试改期|面试时间变更|面试延期|面试提前|"
+    r"reschedule|时间调整|时间变更|面试时间更新",
+    _re.IGNORECASE,
+)
+
+
+def _is_reschedule_event(analysis: EmailAnalysis) -> bool:
+    """判断分析记录是否描述面试时间调整/改期而非新增面试。"""
+    text = " ".join(
+        value
+        for value in (analysis.event_type, analysis.summary)
+        if value
+    )
+    return bool(_RESCHEDULE_RE.search(text))

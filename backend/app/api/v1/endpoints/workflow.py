@@ -51,8 +51,8 @@ def _workflow_service(
     model = create_chat_model_for_user(session, settings)
     classification = ClassificationAgent.from_model(model)
     extraction = ExtractionAgent.from_model(model)
-    application = ApplicationAgent.from_model(model)
-    reply = ReplyAgent.from_model(model)
+    application = ApplicationAgent.from_model(model, factory)
+    reply = ReplyAgent.from_model(model, factory)
     path = settings.checkpoint_path
     if not path.is_absolute():
         path = BACKEND_DIR / path

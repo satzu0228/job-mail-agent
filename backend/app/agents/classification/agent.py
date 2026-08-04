@@ -11,7 +11,7 @@ from app.agents.common.runner import StructuredOutputInvoker, load_prompt
 
 
 class ClassificationAgent:
-    prompt_version = "v1"
+    prompt_version = "v2"
 
     def __init__(
         self,

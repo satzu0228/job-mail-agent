@@ -1,39 +1,46 @@
-import json
+from __future__ import annotations
+
+from collections.abc import Callable
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+from sqlalchemy.orm import Session
 
-from app.agents.common.runner import StructuredOutputInvoker, load_prompt
+from app.agents.common.runner import make_agent_runner, load_prompt
 from app.agents.reply.schemas import ReplyAgentInput, ReplyAgentOutput
+from app.agents.reply.tools import create_reply_tools
 
 
 class ReplyAgent:
-    prompt_version = "v1"
+    prompt_version = "v2"
 
-    def __init__(self, invoker: StructuredOutputInvoker[ReplyAgentOutput]) -> None:
-        self._invoker = invoker
+    def __init__(
+        self,
+        run: Callable[..., ReplyAgentOutput],
+    ) -> None:
+        self._run = run
 
     @classmethod
-    def from_model(cls, model: BaseChatModel) -> "ReplyAgent":
+    def from_model(
+        cls,
+        model: BaseChatModel,
+        session_factory: Callable[[], Session],
+    ) -> "ReplyAgent":
+        tools = create_reply_tools(session_factory)
+        system_prompt = load_prompt("reply", "v2")
         return cls(
-            model.with_structured_output(
+            make_agent_runner(
+                model,
+                tools,
+                system_prompt,
                 ReplyAgentOutput,
-                method="json_mode",
             )
         )
 
-    def run(self, agent_input: ReplyAgentInput) -> ReplyAgentOutput:
-        schema = ReplyAgentOutput.model_json_schema()
-        messages = [
-            SystemMessage(content=load_prompt("reply", self.prompt_version)),
-            HumanMessage(
-                content=(
-                    "请根据邮件、分析、申请和用户上下文判断是否需要回复，并只返回符合"
-                    "输出 Schema 的 JSON 对象。\n"
-                    f"输出 Schema：\n{json.dumps(schema, ensure_ascii=False)}\n"
-                    f"输入：\n"
-                    f"{json.dumps(agent_input.model_dump(mode='json'), ensure_ascii=False)}"
-                )
-            ),
-        ]
-        return ReplyAgentOutput.model_validate(self._invoker.invoke(messages))
+    def run(
+        self,
+        agent_input: ReplyAgentInput,
+        *,
+        config: RunnableConfig | None = None,
+    ) -> ReplyAgentOutput:
+        return self._run(agent_input, config=config or {})
