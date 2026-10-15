@@ -19,7 +19,7 @@ from app.domain.enums import (
     EmailCategory,
     EmailPriority,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
 )
 from app.infrastructure.db.models import (
     AutomationRule,
@@ -201,12 +201,10 @@ class AutomationRuleService:
                 ReviewTask.user_id == self._user_id,
                 ReviewTask.source_email_id == email_id,
                 ReviewTask.action_type == ReviewActionType.ARCHIVE_EMAIL,
-                ReviewTask.status.in_(
+                ReviewTask.decision_status.in_(
                     [
-                        ReviewTaskStatus.PENDING,
-                        ReviewTaskStatus.APPROVED,
-                        ReviewTaskStatus.EXECUTING,
-                        ReviewTaskStatus.SUCCEEDED,
+                        ReviewDecisionStatus.PENDING,
+                        ReviewDecisionStatus.APPROVED,
                     ]
                 ),
             )

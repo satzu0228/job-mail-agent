@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -6,47 +7,50 @@ from sqlalchemy.orm import Session
 from app.domain.enums import (
     EmailAnalysisStatus,
     EmailCategory,
+    InterviewRoundStatus,
     ReviewActionType,
-    ReviewTaskStatus,
-    TaskStatus,
+    ReviewDecisionStatus,
+    RiskLevel,
     TaskType,
 )
 from app.infrastructure.db.models.email import Email
 from app.infrastructure.db.models.email_account import EmailAccount
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
+from app.infrastructure.db.models.interview_round import InterviewRound
+from app.infrastructure.db.models.job_application import JobApplication
 from app.infrastructure.db.models.review_task import ReviewTask
 from app.infrastructure.db.models.task import Task
 
 
 class TaskAutoCreationService:
-    """从已分析邮件中自动创建日程任务。
+    """从已分析邮件中自动创建日程审核建议。
 
-    扫描 extraction_confidence 足够高的 EmailAnalysis 记录，
-    根据提取出的 event_time / deadline_at 创建 Task，
-    使后续 ReminderService.generate_due() 能为其生成提醒。
+    扫描 extraction_confidence 足够高的 EmailAnalysis 记录，根据提取出的
+    event_time / deadline_at 创建 CREATE_TASK ReviewTask。只有用户批准后，
+    TaskCommandHandler 才创建正式 Task，随后 ReminderService 才能生成提醒。
 
     设计上放在自动化轮询周期中而非 workflow graph 内，
     以避免 workflow 在 human_review 处长时间暂停导致
-    Task 创建被不必要地推迟。
+    建议生成被不必要地推迟；人工决定仍是正式日程的唯一入口。
     """
 
     def __init__(self, session: Session, user_id: int) -> None:
         self._session = session
         self._user_id = user_id
 
-    def create_tasks_from_analyses(
+    def create_task_reviews_from_analyses(
         self,
         *,
         confidence_threshold: float = 0.7,
         high_confidence_threshold: float = 0.8,
-    ) -> list[Task]:
-        """扫描可自动创建 Task 的分析记录并创建 Task。"""
+    ) -> list[ReviewTask]:
+        """扫描分析结果并创建日程审核建议，不直接创建正式 Task。"""
         analyses = list(self._find_candidate_analyses(confidence_threshold))
         if not analyses:
             return []
 
         # 收集已处理过的 source_email_id，避免同轮创建同邮件的新查询二次处理。
-        created: list[Task] = []
+        created: list[ReviewTask] = []
         seen_email_ids: set[int] = set()
 
         for analysis in analyses:
@@ -64,7 +68,7 @@ class TaskAutoCreationService:
                 continue
 
             # 如果已有待审核任务，交给审核流程处理。
-            if self._has_pending_review(analysis.email_id):
+            if self._has_task_review(analysis.email_id):
                 seen_email_ids.add(analysis.email_id)
                 continue
 
@@ -74,31 +78,51 @@ class TaskAutoCreationService:
                 continue
 
             title = _build_title(analysis, task_type)
-            status = (
-                TaskStatus.CONFIRMED
-                if (analysis.extraction_confidence or 0) >= high_confidence_threshold
-                else TaskStatus.PENDING
+            application_id = self._resolve_application_id(analysis.email_id)
+            if application_id is None:
+                seen_email_ids.add(analysis.email_id)
+                continue
+            interview_round = (
+                self._suggest_interview_round(application_id, analysis)
+                if task_type is TaskType.INTERVIEW
+                else None
             )
-
-            task = Task(
+            review = ReviewTask(
+                id=str(uuid4()),
                 user_id=self._user_id,
-                application_id=self._resolve_application_id(analysis.email_id),
+                workflow_run_id=None,
                 source_email_id=analysis.email_id,
-                source_review_task_id=None,
-                task_type=task_type,
-                interview_round=None,
-                title=title,
-                description=analysis.summary,
-                raw_time_text=self._raw_time_text(analysis),
-                start_at=self._event_start(analysis, task_type),
-                deadline_at=analysis.deadline_at,
-                source_timezone=analysis.source_timezone,
-                location=None,
-                meeting_url=self._meeting_url(analysis),
-                status=status,
+                application_id=application_id,
+                action_type=ReviewActionType.CREATE_TASK,
+                risk_level=RiskLevel.HIGH,
+                proposed_payload={
+                    "schema_version": "task-review.v1",
+                    "application_id": application_id,
+                    "source_email_id": analysis.email_id,
+                    "task_type": task_type.value,
+                    "interview_round": interview_round,
+                    "title": title,
+                    "description": analysis.summary,
+                    "raw_time_text": self._raw_time_text(analysis),
+                    "start_at": _json_datetime(
+                        self._event_start(analysis, task_type)
+                    ),
+                    "deadline_at": _json_datetime(analysis.deadline_at),
+                    "source_timezone": analysis.source_timezone,
+                    "location": self._location(analysis),
+                    "meeting_url": self._meeting_url(analysis),
+                    "automation_confidence": analysis.extraction_confidence,
+                    "auto_confirm_eligible": (
+                        (analysis.extraction_confidence or 0)
+                        >= high_confidence_threshold
+                    ),
+                },
+                decision_status=ReviewDecisionStatus.PENDING,
+                idempotency_key=f"auto-task-review:{analysis.id}:{task_type.value}",
+                resource_version=self._application_version(application_id),
             )
-            self._session.add(task)
-            created.append(task)
+            self._session.add(review)
+            created.append(review)
             seen_email_ids.add(analysis.email_id)
 
         if created:
@@ -147,15 +171,22 @@ class TaskAutoCreationService:
             is not None
         )
 
-    def _has_pending_review(self, source_email_id: int) -> bool:
-        """同邮件存在未完成的审核任务时跳过自动创建，避免：
-        - 邮件尚未关联申请（application_id 为空）
-        - 与审核流程中的 _create_task_follow_up 重复创建"""
+    def _has_task_review(self, source_email_id: int) -> bool:
+        """已有待处理、已批准或已拒绝日程建议时，不得绕过原决定重复创建。"""
         return (
             self._session.scalar(
                 select(ReviewTask.id).where(
                     ReviewTask.source_email_id == source_email_id,
-                    ReviewTask.status == ReviewTaskStatus.PENDING,
+                    ReviewTask.action_type.in_(
+                        [ReviewActionType.CREATE_TASK, ReviewActionType.UPDATE_TASK]
+                    ),
+                    ReviewTask.decision_status.in_(
+                        [
+                            ReviewDecisionStatus.PENDING,
+                            ReviewDecisionStatus.APPROVED,
+                            ReviewDecisionStatus.REJECTED,
+                        ]
+                    ),
                 ).limit(1)
             )
             is not None
@@ -164,6 +195,39 @@ class TaskAutoCreationService:
     def _resolve_application_id(self, email_id: int) -> int | None:
         email = self._session.get(Email, email_id)
         return email.application_id if email is not None else None
+
+    def _application_version(self, application_id: int) -> int:
+        version = self._session.scalar(
+            select(JobApplication.version).where(
+                JobApplication.id == application_id,
+                JobApplication.user_id == self._user_id,
+            )
+        )
+        return int(version or 0)
+
+    def _suggest_interview_round(
+        self,
+        application_id: int,
+        analysis: EmailAnalysis,
+    ) -> int:
+        extraction = analysis.extraction_json or {}
+        explicit = extraction.get("round_number")
+        if isinstance(explicit, int) and 1 <= explicit <= 20:
+            return explicit
+        latest = self._session.scalar(
+            select(InterviewRound)
+            .where(InterviewRound.application_id == application_id)
+            .order_by(InterviewRound.round_number.desc())
+            .limit(1)
+        )
+        if latest is None:
+            return 1
+        if latest.status in {
+            InterviewRoundStatus.PLANNED,
+            InterviewRoundStatus.SCHEDULED,
+        }:
+            return latest.round_number
+        return latest.round_number + 1
 
     @staticmethod
     def _raw_time_text(analysis: EmailAnalysis) -> str | None:
@@ -185,6 +249,13 @@ class TaskAutoCreationService:
         extraction = analysis.extraction_json or {}
         meeting_url = extraction.get("meeting_url") or {}
         value = meeting_url.get("value") if isinstance(meeting_url, dict) else None
+        return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _location(analysis: EmailAnalysis) -> str | None:
+        extraction = analysis.extraction_json or {}
+        location = extraction.get("location") or {}
+        value = location.get("value") if isinstance(location, dict) else None
         return value if isinstance(value, str) and value.strip() else None
 
 
@@ -281,3 +352,9 @@ def _is_reschedule_event(analysis: EmailAnalysis) -> bool:
         if value
     )
     return bool(_RESCHEDULE_RE.search(text))
+
+
+def _json_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if value.tzinfo is not None else f"{value.isoformat()}Z"

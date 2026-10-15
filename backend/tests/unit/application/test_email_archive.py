@@ -5,7 +5,7 @@ from app.domain.enums import (
     ArchiveStatus,
     ExecutionStatus,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
 )
 from app.infrastructure.email import ImapMoveResult, ImapMoveUnknownError
 
@@ -75,7 +75,7 @@ def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
         workflow_run_id="archive-run",
         source_email_id=8,
         action_type=ReviewActionType.ARCHIVE_EMAIL,
-        status=ReviewTaskStatus.APPROVED,
+        decision_status=ReviewDecisionStatus.APPROVED,
         proposed_payload={
             "source_folder": "INBOX",
             "source_uid_validity": 77,
@@ -164,6 +164,6 @@ def test_unknown_archive_result_is_never_retried(monkeypatch) -> None:
 
     assert first is second
     assert first.status is ExecutionStatus.UNKNOWN
-    assert task.status is ReviewTaskStatus.UNKNOWN
+    assert task.decision_status is ReviewDecisionStatus.APPROVED
     assert email.archive_status is ArchiveStatus.PROPOSED
     assert mover.calls == 1

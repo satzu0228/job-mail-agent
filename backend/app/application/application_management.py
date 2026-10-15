@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.agents.application.schemas import (
@@ -19,12 +19,29 @@ from app.agents.application.schemas import (
     ApplicationRecommendation,
     CandidateScoreBreakdown,
 )
+from app.application.application_commands import ApplicationCommandHandler
+from app.application.review_actions import (
+    REVIEW_ACTION_REGISTRY,
+    CreateTaskReviewCommand,
+    ReviewHandlerKey,
+    UpdateTaskReviewCommand,
+)
+from app.application.review_decisions import (
+    review_decision_status,
+    set_review_decision,
+)
 from app.application.schemas import (
     ApplicationMatchResponse,
     ReviewDecision,
     ReviewDecisionResponse,
 )
-from app.application.task_linkage import settle_interview_tasks
+from app.application.task_commands import TaskCommandHandler
+from app.domain.application import (
+    CommandContext,
+    InterviewApplicationOutcome,
+    RecordInterviewResultCommand,
+    TransitionApplicationCommand,
+)
 from app.domain.application_state import StageTransitionStatus, validate_stage_transition
 from app.domain.enums import (
     ApplicationSource,
@@ -33,14 +50,12 @@ from app.domain.enums import (
     DecisionSource,
     EmailCategory,
     ExecutionStatus,
-    ExecutorType,
     InterviewResult,
     InterviewRoundSource,
     ReplyDraftStatus,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     RiskLevel,
-    TaskStatus,
     TaskType,
     WorkflowRunStatus,
 )
@@ -310,27 +325,9 @@ class ApplicationManagementService:
         model_duration_ms: float,
     ) -> ReviewTask:
         now = _utc_now()
-        if workflow_run_id is None:
-            run_id = str(uuid4())
-            workflow = WorkflowRun(
-                id=run_id,
-                thread_id=str(uuid4()),
-                user_id=self._user_id,
-                email_id=email.id,
-                status=WorkflowRunStatus.WAITING_REVIEW,
-                current_node="application_review",
-                graph_version="phase-6-standalone.v1",
-                model_provider=self._model_provider,
-                model_name=self._model_name,
-                prompt_versions={"application": self._agent.prompt_version},
-                agent_trace=[],
-                started_at=now,
-            )
-            self._session.add(workflow)
-            # 两表存在 pending_review_task_id 循环外键，先落库工作流再创建审核任务。
-            self._session.flush()
-        else:
-            run_id = workflow_run_id
+        workflow = None
+        run_id = workflow_run_id
+        if workflow_run_id is not None:
             workflow = self._session.get(WorkflowRun, run_id)
             if (
                 workflow is None
@@ -344,9 +341,10 @@ class ApplicationManagementService:
                 **workflow.prompt_versions,
                 "application": self._agent.prompt_version,
             }
-        workflow.agent_trace = [
-            *workflow.agent_trace,
-            {
+        if workflow is not None:
+            workflow.agent_trace = [
+                *workflow.agent_trace,
+                {
                 "agent": "application",
                 "node": "match_application",
                 "prompt_version": self._agent.prompt_version,
@@ -356,8 +354,8 @@ class ApplicationManagementService:
                 "status": "SUCCEEDED",
                 "duration_ms": model_duration_ms,
                 "recorded_at": now.isoformat(),
-            },
-        ]
+                },
+            ]
         selected = suggestion.selected_application_id
         selected_application = (
             self._session.get(JobApplication, selected) if selected is not None else None
@@ -425,13 +423,13 @@ class ApplicationManagementService:
             action_type=action_type,
             risk_level=RiskLevel.HIGH,
             proposed_payload=payload,
-            status=ReviewTaskStatus.PENDING,
             idempotency_key=idempotency_key,
             resource_version=selected_application.version if selected_application else 0,
         )
         self._session.add(task)
         self._session.flush()
-        workflow.pending_review_task_id = task.id
+        if workflow is not None:
+            workflow.pending_review_task_id = task.id
         return task
 
     def _find_pending_create_review(
@@ -445,7 +443,7 @@ class ApplicationManagementService:
         conditions = [
             ReviewTask.user_id == self._user_id,
             ReviewTask.action_type == ReviewActionType.CREATE_APPLICATION,
-            ReviewTask.status == ReviewTaskStatus.PENDING,
+            ReviewTask.decision_status == ReviewDecisionStatus.PENDING,
         ]
         if exclude_email_id is not None:
             conditions.append(ReviewTask.source_email_id != exclude_email_id)
@@ -517,28 +515,17 @@ class ReviewTaskService:
         self._session = session
         self._user_id = user_id
 
-    def list(self, *, offset: int, limit: int) -> list[ReviewTask]:
-        return list(
-            self._session.scalars(
-                select(ReviewTask)
-                .where(ReviewTask.user_id == self._user_id)
-                .order_by(ReviewTask.created_at.desc())
-                .offset(offset)
-                .limit(limit)
-            )
-        )
-
     def query(
         self,
         *,
         offset: int,
         limit: int,
-        status: ReviewTaskStatus | None = None,
+        status: ReviewDecisionStatus | None = None,
         action_type: ReviewActionType | None = None,
     ) -> tuple[list[ReviewTask], int]:
         conditions = [ReviewTask.user_id == self._user_id]
         if status is not None:
-            conditions.append(ReviewTask.status == status)
+            conditions.append(ReviewTask.decision_status == status)
         if action_type is not None:
             conditions.append(ReviewTask.action_type == action_type)
         total = int(
@@ -554,7 +541,9 @@ class ReviewTaskService:
             .offset(offset)
             .limit(limit)
         )
-        return list(self._session.scalars(statement)), total
+        tasks = list(self._session.scalars(statement))
+        self._attach_execution_states(tasks)
+        return tasks, total
 
     def get(self, task_id: str, *, for_update: bool = False) -> ReviewTask:
         statement = select(ReviewTask).where(
@@ -566,6 +555,7 @@ class ReviewTaskService:
         task = self._session.scalar(statement)
         if task is None:
             raise EntityNotFoundError(f"Review task {task_id} does not exist")
+        self._attach_execution_states([task])
         return task
 
     def decide(
@@ -576,7 +566,7 @@ class ReviewTaskService:
         recorded = self.record_decision(task_id, decision, update_workflow=True)
         if not recorded.should_resume:
             return self._existing_response(recorded.task)
-        if recorded.task.status is ReviewTaskStatus.REJECTED:
+        if review_decision_status(recorded.task) is ReviewDecisionStatus.REJECTED:
             return ReviewDecisionResponse(review_task=recorded.task)
         if recorded.task.action_type is ReviewActionType.SEND_REPLY:
             return self._existing_response(recorded.task)
@@ -591,13 +581,19 @@ class ReviewTaskService:
     ) -> RecordedReviewDecision:
         with self._session.begin():
             task = self.get(task_id, for_update=True)
-            if task.status is ReviewTaskStatus.SUCCEEDED:
+            current = review_decision_status(task)
+            execution = self._latest_execution(task.id)
+            if execution is not None and execution.status in {
+                ExecutionStatus.SUCCEEDED,
+                ExecutionStatus.UNKNOWN,
+                ExecutionStatus.RUNNING,
+            }:
                 return RecordedReviewDecision(task=task, should_resume=False)
-            if task.status is ReviewTaskStatus.REJECTED and not decision.approve:
+            if current is ReviewDecisionStatus.REJECTED and not decision.approve:
                 return RecordedReviewDecision(task=task, should_resume=False)
-            if task.status is not ReviewTaskStatus.PENDING:
+            if current is not ReviewDecisionStatus.PENDING:
                 raise ResourceConflictError(
-                    f"审核任务当前状态 {task.status.value} 不允许提交决策"
+                    f"审核任务当前状态 {current.value} 不允许提交决策"
                 )
             if task.version != decision.version:
                 raise VersionConflictError(
@@ -606,11 +602,14 @@ class ReviewTaskService:
 
             now = _utc_now()
             task.reviewed_payload = decision.reviewed_payload
-            task.decision_source = DecisionSource.USER
-            task.decision_reason = decision.reason
-            task.reviewed_at = now
             if not decision.approve:
-                task.status = ReviewTaskStatus.REJECTED
+                set_review_decision(
+                    task,
+                    ReviewDecisionStatus.REJECTED,
+                    source=DecisionSource.USER,
+                    reason=decision.reason,
+                    reviewed_at=now,
+                )
                 self._update_reply_draft_after_decision(task, approved=False)
                 if update_workflow:
                     self._update_workflow_after_decision(task, follow_up=None)
@@ -620,8 +619,22 @@ class ReviewTaskService:
             payload = dict(task.proposed_payload)
             if decision.reviewed_payload:
                 payload.update(decision.reviewed_payload)
+            try:
+                REVIEW_ACTION_REGISTRY.parse(
+                    task.action_type,
+                    task.proposed_payload,
+                    decision.reviewed_payload,
+                )
+            except ValueError as exc:
+                raise ResourceConflictError(str(exc)) from exc
             self._validate_approved_payload(task, payload)
-            task.status = ReviewTaskStatus.APPROVED
+            set_review_decision(
+                task,
+                ReviewDecisionStatus.APPROVED,
+                source=DecisionSource.USER,
+                reason=decision.reason,
+                reviewed_at=now,
+            )
             self._update_reply_draft_after_decision(task, approved=True)
             self._session.flush()
             return RecordedReviewDecision(task=task, should_resume=True)
@@ -634,43 +647,76 @@ class ReviewTaskService:
     ) -> ReviewDecisionResponse:
         with self._session.begin():
             task = self.get(task_id, for_update=True)
-            if task.status is ReviewTaskStatus.SUCCEEDED:
+            decision_status = review_decision_status(task)
+            existing = self._latest_execution(task.id)
+            if existing is not None and existing.status in {
+                ExecutionStatus.SUCCEEDED,
+                ExecutionStatus.RUNNING,
+                ExecutionStatus.UNKNOWN,
+            }:
                 return self._existing_response(task)
-            if task.status is ReviewTaskStatus.REJECTED:
+            if decision_status is ReviewDecisionStatus.REJECTED:
                 return ReviewDecisionResponse(review_task=task)
-            if task.status is not ReviewTaskStatus.APPROVED:
+            if decision_status is not ReviewDecisionStatus.APPROVED:
                 raise ResourceConflictError(
-                    f"审核任务当前状态 {task.status.value} 不允许执行"
+                    f"审核任务当前状态 {decision_status.value} 不允许执行"
                 )
 
             payload = dict(task.proposed_payload)
             if task.reviewed_payload:
                 payload.update(task.reviewed_payload)
+            try:
+                command = REVIEW_ACTION_REGISTRY.parse(
+                    task.action_type,
+                    task.proposed_payload,
+                    task.reviewed_payload,
+                )
+            except ValueError as exc:
+                raise ResourceConflictError(str(exc)) from exc
             self._validate_approved_payload(task, payload)
             now = _utc_now()
-            task.status = ReviewTaskStatus.EXECUTING
-            is_task_action = task.action_type is ReviewActionType.CREATE_TASK
+            spec = REVIEW_ACTION_REGISTRY.get(task.action_type)
+            if spec.handler_key in {ReviewHandlerKey.SMTP, ReviewHandlerKey.IMAP}:
+                raise ResourceConflictError("外部动作必须由专用 Executor 执行")
+            attempt_no = (existing.attempt_no if existing is not None else 0) + 1
             execution = ActionExecution(
                 review_task_id=task.id,
-                attempt_no=1,
-                idempotency_key=f"execute:{task.id}:1",
-                executor_type=(ExecutorType.TASK if is_task_action else ExecutorType.APPLICATION),
+                attempt_no=attempt_no,
+                idempotency_key=spec.idempotency_key(task.id, attempt_no),
+                executor_type=spec.executor_type,
                 status=ExecutionStatus.RUNNING,
                 started_at=now,
             )
             self._session.add(execution)
             self._session.flush()
 
-            if is_task_action:
-                scheduled_task = self._execute_task(task, payload)
-                application = self._owned_application(scheduled_task.application_id)
+            if isinstance(command, CreateTaskReviewCommand):
+                task_result = TaskCommandHandler(
+                    self._session, self._user_id
+                ).create(task, command)
+                application = self._owned_application(task_result.task.application_id)
                 follow_up = None
-                external_reference = f"task:{scheduled_task.id}"
+                external_reference = f"task:{task_result.task.id}"
                 result = {
-                    "task_id": scheduled_task.id,
+                    "task_id": task_result.task.id,
                     "application_id": application.id,
                     "email_id": task.source_email_id,
-                    "follow_up_review_task_id": None,
+                    "before": task_result.before,
+                    "after": task_result.after,
+                }
+            elif isinstance(command, UpdateTaskReviewCommand):
+                task_result = TaskCommandHandler(
+                    self._session, self._user_id
+                ).update(task, command)
+                application = self._owned_application(task_result.task.application_id)
+                follow_up = None
+                external_reference = f"task:{task_result.task.id}"
+                result = {
+                    "task_id": task_result.task.id,
+                    "application_id": application.id,
+                    "email_id": task.source_email_id,
+                    "before": task_result.before,
+                    "after": task_result.after,
                 }
             else:
                 application = self._execute(task, payload)
@@ -681,13 +727,12 @@ class ReviewTaskService:
                 result = {
                     "application_id": application.id,
                     "email_id": task.source_email_id,
-                    "follow_up_review_task_id": follow_up.id if follow_up else None,
                 }
             execution.status = ExecutionStatus.SUCCEEDED
             execution.external_reference = external_reference
             execution.result = result
             execution.finished_at = _utc_now()
-            task.status = ReviewTaskStatus.SUCCEEDED
+            task.execution_status = ExecutionStatus.SUCCEEDED
             if update_workflow:
                 self._update_workflow_after_decision(task, follow_up=follow_up)
             self._session.flush()
@@ -708,7 +753,9 @@ class ReviewTaskService:
             # 支持推迟关联：有 deferred_source 时不需要在载荷中直接提供 application_id
             if not isinstance(application_id, int) or application_id <= 0:
                 if not isinstance(deferred_source, str) or not deferred_source:
-                    raise ResourceConflictError("批准关联申请时必须明确 application_id 或推迟关联源")
+                    raise ResourceConflictError(
+                        "批准关联申请时必须明确 application_id 或推迟关联源"
+                    )
                 # 验证推迟源存在且已执行成功
                 source_task = self._session.get(ReviewTask, deferred_source)
                 if source_task is None or source_task.user_id != self._user_id:
@@ -753,26 +800,20 @@ class ReviewTaskService:
                 raise ResourceConflictError("日程审核引用的求职申请无效")
             if payload.get("source_email_id") != task.source_email_id:
                 raise ResourceConflictError("日程审核引用的来源邮件无效")
-            if payload.get("task_type") != TaskType.INTERVIEW.value:
-                raise ResourceConflictError("当前智能工作流只支持创建面试日程")
-            round_value = payload.get("interview_round")
-            if not isinstance(round_value, int) or not 1 <= round_value <= 20:
-                raise ResourceConflictError("面试日程必须包含 1～20 的面试轮次")
-            if _review_datetime(payload.get("start_at")) is None:
-                raise ResourceConflictError("面试日程必须包含明确的开始时间")
-            if not _optional_text(payload.get("title")):
-                raise ResourceConflictError("面试日程必须包含标题")
-            text_limits = (
-                ("title", 255),
-                ("raw_time_text", 500),
-                ("source_timezone", 64),
-                ("location", 500),
-                ("meeting_url", 2048),
+        elif task.action_type is ReviewActionType.UPDATE_TASK:
+            task_id = payload.get("task_id")
+            if not isinstance(task_id, int):
+                raise ResourceConflictError("日程更新审核缺少任务 ID")
+            scheduled_task = self._session.scalar(
+                select(Task).where(
+                    Task.id == task_id,
+                    Task.user_id == self._user_id,
+                )
             )
-            for field_name, limit in text_limits:
-                value = payload.get(field_name)
-                if value is not None and (not isinstance(value, str) or len(value) > limit):
-                    raise ResourceConflictError(f"日程字段 {field_name} 无效")
+            if scheduled_task is None:
+                raise EntityNotFoundError(f"Task {task_id} does not exist")
+            if scheduled_task.application_id != task.application_id:
+                raise ResourceConflictError("日程更新审核引用的求职申请无效")
         elif task.action_type is ReviewActionType.SEND_REPLY:
             unexpected = set(task.reviewed_payload or {}) - {"body"}
             if unexpected:
@@ -912,18 +953,13 @@ class ReviewTaskService:
             if deferred_source and application is None:
                 effective_application = self._resolve_deferred_application(deferred_source)
             if effective_application is None:
-                raise ResourceConflictError("无法解析推迟关联的目标申请，请先批准对应的新建申请审核")
+                raise ResourceConflictError(
+                    "无法解析推迟关联的目标申请，请先批准对应的新建申请审核"
+                )
 
             email = self._owned_email(task.source_email_id)
             email.application_id = effective_application.id
             task.application_id = effective_application.id
-
-            # 回填此前由 TaskAutoCreationService 自动创建但尚未关联申请的日程
-            _backfill_task_application(
-                self._session,
-                source_email_id=email.id,
-                application_id=effective_application.id,
-            )
 
             self._session.add(
                 ApplicationEvent(
@@ -942,142 +978,65 @@ class ReviewTaskService:
         if task.action_type is ReviewActionType.UPDATE_INTERVIEW_RESULT:
             round_number = int(payload["round_number"])
             result = _interview_result(payload["result"])
-            previous_result = application.interview_result
+            if result is None:
+                raise ResourceConflictError("面试结果不能为空")
             source_email_id = payload.get("source_email_id") or task.source_email_id
-            self._upsert_interview_round(
-                application_id=application.id,
-                round_number=round_number,
-                result=result,
-                source=(
-                    InterviewRoundSource.EMAIL
-                    if source_email_id
-                    else InterviewRoundSource.MANUAL
+            ApplicationCommandHandler(self._session, self._user_id).record_interview_result(
+                application,
+                RecordInterviewResultCommand(
+                    application_id=application.id,
+                    expected_version=getattr(task, "resource_version", application.version),
+                    round_number=round_number,
+                    result=result,
+                    outcome=(
+                        InterviewApplicationOutcome.CLOSE_AS_REJECTED
+                        if result is InterviewResult.FAILED
+                        and payload.get("close_application", True)
+                        else InterviewApplicationOutcome.KEEP_ACTIVE
+                    ),
+                    round_source=(
+                        InterviewRoundSource.EMAIL
+                        if source_email_id
+                        else InterviewRoundSource.MANUAL
+                    ),
+                    context=self._command_context(task, payload, source_email_id),
                 ),
-                source_email_id=source_email_id,
-                notes=payload.get("reason"),
-            )
-            # 根据本轮结果收敛关联的面试日程
-            if result in {InterviewResult.PASSED, InterviewResult.FAILED}:
-                settle_interview_tasks(
-                    self._session,
-                    application_id=application.id,
-                    status=TaskStatus.COMPLETED,
-                    current_round_only=True,
-                )
-            self._session.add(
-                ApplicationEvent(
-                    application_id=application.id,
-                    source_email_id=source_email_id,
-                    workflow_run_id=task.workflow_run_id,
-                    event_type="INTERVIEW_RESULT_CHANGED",
-                    previous_stage=application.current_stage,
-                    confirmed_stage=application.current_stage,
-                    details={
-                        "review_task_id": task.id,
-                        "round_number": round_number,
-                        "previous_result": (
-                            previous_result.value if previous_result else None
-                        ),
-                        "interview_result": result.value,
-                    },
-                )
             )
             return application
 
         proposed = _application_stage(payload.get("proposed_stage"))
-        previous = application.current_stage
-        previous_result = application.interview_result
-        application.current_stage = proposed
         extracted_result = _interview_result(payload.get("interview_result"))
-        if proposed is ApplicationStage.INTERVIEW and extracted_result is not None:
-            # 仅在首次进入面试阶段（非 INTERVIEW→INTERVIEW），或结果为通过/未通过时更新
-            if previous is not ApplicationStage.INTERVIEW:
-                application.interview_result = extracted_result
-            elif extracted_result in (InterviewResult.PASSED, InterviewResult.FAILED):
-                application.interview_result = extracted_result
-            # 同一面试阶段内 PENDING 不覆盖已确认的结果
-        elif proposed is ApplicationStage.REJECTED and previous is ApplicationStage.INTERVIEW:
-            application.interview_result = InterviewResult.FAILED
-        elif proposed is ApplicationStage.OFFER and previous is ApplicationStage.INTERVIEW:
-            application.interview_result = InterviewResult.PASSED
-
-        # 将阶段变更中隐含的面试结果同步到 interview_rounds 表
-        if previous is ApplicationStage.INTERVIEW or proposed is ApplicationStage.INTERVIEW:
-            self._sync_stage_result_to_rounds(
-                application,
-                previous=previous,
-                proposed=proposed,
-                extracted_result=extracted_result,
-                source_review_task_id=task.id,
-                source_email_id=task.source_email_id,
-            )
-
-        if application.interview_result is InterviewResult.FAILED:
-            application.status = ApplicationStatus.CLOSED
-        elif proposed is ApplicationStage.WITHDRAWN:
-            application.status = ApplicationStatus.WITHDRAWN
-        else:
-            application.status = ApplicationStatus.ACTIVE
-
-        # 离开 ASSESSMENT 阶段时，结算测评类日程
-        if previous is ApplicationStage.ASSESSMENT:
-            self._settle_assessment_tasks(
-                application.id,
-                status=TaskStatus.COMPLETED,
-            )
-
-        if previous is ApplicationStage.INTERVIEW:
-            if proposed is ApplicationStage.WITHDRAWN:
-                settle_interview_tasks(
-                    self._session,
-                    application_id=application.id,
-                    status=TaskStatus.CANCELLED,
-                    current_round_only=False,
-                )
-            elif proposed is not ApplicationStage.INTERVIEW:
-                settle_interview_tasks(
-                    self._session,
-                    application_id=application.id,
-                    status=TaskStatus.COMPLETED,
-                    current_round_only=False,
-                )
-            elif application.interview_result in {
-                InterviewResult.PASSED,
-                InterviewResult.FAILED,
-            }:
-                settle_interview_tasks(
-                    self._session,
-                    application_id=application.id,
-                    status=TaskStatus.COMPLETED,
-                    current_round_only=True,
-                )
-        self._session.add(
-            ApplicationEvent(
+        ApplicationCommandHandler(self._session, self._user_id).transition_stage(
+            application,
+            TransitionApplicationCommand(
                 application_id=application.id,
-                source_email_id=task.source_email_id,
-                workflow_run_id=task.workflow_run_id,
-                event_type=(
-                    "INTERVIEW_RESULT_CHANGED"
-                    if previous is proposed and previous_result != application.interview_result
-                    else "STAGE_CHANGED"
-                ),
-                previous_stage=previous,
+                expected_version=getattr(task, "resource_version", application.version),
                 proposed_stage=proposed,
-                confirmed_stage=proposed,
-                details={
-                    "review_task_id": task.id,
-                    "previous_result": (
-                        previous_result.value if previous_result else None
-                    ),
-                    "interview_result": (
-                        application.interview_result.value
-                        if application.interview_result
-                        else None
-                    ),
-                },
-            )
+                interview_result=extracted_result,
+                context=self._command_context(task, payload, task.source_email_id),
+            ),
         )
         return application
+
+    @staticmethod
+    def _command_context(
+        task: ReviewTask,
+        payload: dict[str, Any],
+        source_email_id: int | None,
+    ) -> CommandContext:
+        reason = (
+            payload.get("reason")
+            or payload.get("summary")
+            or getattr(task, "decision_reason", None)
+        )
+        return CommandContext(
+            reason=str(reason or "用户批准审核建议"),
+            decision_source=getattr(task, "decision_source", None)
+            or DecisionSource.USER,
+            source_email_id=source_email_id,
+            workflow_run_id=getattr(task, "workflow_run_id", None),
+            review_task_id=task.id,
+        )
 
     def _create_stage_follow_up(
         self,
@@ -1118,6 +1077,7 @@ class ReviewTaskService:
                     id=str(uuid4()),
                     user_id=self._user_id,
                     workflow_run_id=source_task.workflow_run_id,
+                    parent_review_task_id=source_task.id,
                     source_email_id=source_task.source_email_id,
                     application_id=application.id,
                     action_type=ReviewActionType.UPDATE_INTERVIEW_RESULT,
@@ -1133,7 +1093,6 @@ class ReviewTaskService:
                         "source_email_id": source_task.source_email_id,
                         "source_review_task_id": source_task.id,
                     },
-                    status=ReviewTaskStatus.PENDING,
                     idempotency_key=(
                         f"interview-result:{source_task.id}:{application.id}:"
                         f"{round_number}:{result.value}"
@@ -1168,6 +1127,7 @@ class ReviewTaskService:
             id=str(uuid4()),
             user_id=self._user_id,
             workflow_run_id=source_task.workflow_run_id,
+            parent_review_task_id=source_task.id,
             source_email_id=source_task.source_email_id,
             application_id=application.id,
             action_type=ReviewActionType.UPDATE_APPLICATION_STAGE,
@@ -1186,7 +1146,6 @@ class ReviewTaskService:
                 },
                 "source_review_task_id": source_task.id,
             },
-            status=ReviewTaskStatus.PENDING,
             idempotency_key=(
                 f"stage:{source_task.id}:{application.id}:{proposed.value}:"
                 f"{result.value if result else 'NONE'}"
@@ -1219,7 +1178,10 @@ class ReviewTaskService:
             return self._create_interview_task_review(source_task, application, analysis)
 
         # 材料补充 / Offer 截止期限日程
-        if analysis.category in (EmailCategory.MATERIAL_REQUEST, EmailCategory.OFFER) and analysis.deadline_at is not None:
+        if (
+            analysis.category in (EmailCategory.MATERIAL_REQUEST, EmailCategory.OFFER)
+            and analysis.deadline_at is not None
+        ):
             return self._create_deadline_task_review(source_task, application, analysis)
 
         return None
@@ -1258,40 +1220,71 @@ class ReviewTaskService:
 
         # 去重：检查 Task 表是否已有同邮件+同类型的日程
         duplicate_task = self._session.scalar(
-            select(Task).where(
+            select(Task)
+            .outerjoin(
+                InterviewRound,
+                InterviewRound.id == Task.interview_round_id,
+            )
+            .where(
                 Task.user_id == self._user_id,
-                Task.source_email_id == source_task.source_email_id,
                 Task.task_type == TaskType.INTERVIEW,
-            ).limit(1)
+                or_(
+                    Task.source_email_id == source_task.source_email_id,
+                    (
+                        (Task.application_id == application.id)
+                        & (InterviewRound.round_number == interview_round)
+                    ),
+                ),
+            )
+            .limit(1)
         )
         if duplicate_task is not None:
-            updated = False
             if duplicate_task.application_id is None:
                 duplicate_task.application_id = application.id
-                updated = True
-            if duplicate_task.interview_round is None:
-                duplicate_task.interview_round = interview_round
-                updated = True
-            if updated:
-                self._session.flush()
-            self._upsert_interview_round(
-                application_id=application.id,
-                round_number=interview_round,
-                result=InterviewResult.PENDING,
-                interview_date=analysis.event_time.astimezone(UTC).replace(tzinfo=None)
+            self._session.flush()
+            proposed_start = (
+                analysis.event_time.astimezone(UTC).replace(tzinfo=None)
                 if analysis.event_time
-                else None,
-                location=location,
-                meeting_url=meeting_url,
-                source=InterviewRoundSource.EMAIL,
-                source_email_id=source_task.source_email_id,
+                else None
             )
-            return None
+            changes: dict[str, Any] = {}
+            if duplicate_task.start_at != proposed_start:
+                changes["start_at"] = _json_datetime(proposed_start)
+            if duplicate_task.location != location:
+                changes["location"] = location
+            if duplicate_task.meeting_url != meeting_url:
+                changes["meeting_url"] = meeting_url
+            if not changes:
+                return None
+            follow_up = ReviewTask(
+                id=str(uuid4()),
+                user_id=self._user_id,
+                workflow_run_id=source_task.workflow_run_id,
+                parent_review_task_id=source_task.id,
+                source_email_id=source_task.source_email_id,
+                application_id=application.id,
+                action_type=ReviewActionType.UPDATE_TASK,
+                risk_level=RiskLevel.HIGH,
+                proposed_payload={
+                    "schema_version": "task-update-review.v1",
+                    "task_id": duplicate_task.id,
+                    "task_version": duplicate_task.version,
+                    "before": _task_review_snapshot(duplicate_task),
+                    "reason": analysis.summary or "邮件通知面试安排发生变化",
+                    **changes,
+                },
+                idempotency_key=f"interview-task-update:{analysis.id}:{duplicate_task.id}",
+                resource_version=duplicate_task.version,
+            )
+            self._session.add(follow_up)
+            self._session.flush()
+            return follow_up
 
         follow_up = ReviewTask(
             id=str(uuid4()),
             user_id=self._user_id,
             workflow_run_id=source_task.workflow_run_id,
+            parent_review_task_id=source_task.id,
             source_email_id=source_task.source_email_id,
             application_id=application.id,
             action_type=ReviewActionType.CREATE_TASK,
@@ -1318,7 +1311,6 @@ class ReviewTaskService:
                 "meeting_url": meeting_url,
                 "source_review_task_id": source_task.id,
             },
-            status=ReviewTaskStatus.PENDING,
             idempotency_key=idempotency_key,
             resource_version=0,
         )
@@ -1375,6 +1367,7 @@ class ReviewTaskService:
             id=str(uuid4()),
             user_id=self._user_id,
             workflow_run_id=source_task.workflow_run_id,
+            parent_review_task_id=source_task.id,
             source_email_id=source_task.source_email_id,
             application_id=application.id,
             action_type=ReviewActionType.CREATE_TASK,
@@ -1400,25 +1393,12 @@ class ReviewTaskService:
                 "meeting_url": None,
                 "source_review_task_id": source_task.id,
             },
-            status=ReviewTaskStatus.PENDING,
             idempotency_key=idempotency_key,
             resource_version=0,
         )
         self._session.add(follow_up)
         self._session.flush()
         return follow_up
-
-    def _infer_interview_round(self, application_id: int, text: str) -> int:
-        explicit = _parse_interview_round(text)
-        if explicit is not None:
-            return explicit
-        latest = self._session.scalar(
-            select(func.max(Task.interview_round)).where(
-                Task.application_id == application_id,
-                Task.task_type == TaskType.INTERVIEW,
-            )
-        )
-        return int(latest or 0) + 1
 
     def _infer_next_interview_round(self, application_id: int, text: str) -> int:
         """推断新面试的轮次。从文本中取最大轮次号（因为新面试总是最后提及的），
@@ -1427,9 +1407,8 @@ class ReviewTaskService:
         if max_parsed is not None:
             return max_parsed
         latest = self._session.scalar(
-            select(func.max(Task.interview_round)).where(
-                Task.application_id == application_id,
-                Task.task_type == TaskType.INTERVIEW,
+            select(func.max(InterviewRound.round_number)).where(
+                InterviewRound.application_id == application_id,
             )
         )
         # 面试时间调整/改期邮件，未提及新轮次时复用已有最近轮次
@@ -1437,212 +1416,36 @@ class ReviewTaskService:
             return int(latest or 0) or 1
         return int(latest or 0) + 1
 
-    def _execute_task(self, review_task: ReviewTask, payload: dict[str, Any]) -> Task:
-        task = Task(
-            user_id=self._user_id,
-            application_id=review_task.application_id,
-            source_email_id=review_task.source_email_id,
-            source_review_task_id=review_task.id,
-            task_type=TaskType.INTERVIEW,
-            interview_round=int(payload["interview_round"]),
-            title=str(payload["title"]).strip(),
-            description=_optional_text(payload.get("description")),
-            raw_time_text=_optional_text(payload.get("raw_time_text")),
-            start_at=_review_datetime(payload.get("start_at")),
-            deadline_at=_review_datetime(payload.get("deadline_at")),
-            source_timezone=_optional_text(payload.get("source_timezone")),
-            location=_optional_text(payload.get("location")),
-            meeting_url=_optional_text(payload.get("meeting_url")),
-            status=TaskStatus.CONFIRMED,
-        )
-        self._session.add(task)
-        application = self._owned_application(review_task.application_id)
-        # 更新或新建对应轮次的 interview_rounds 记录
-        # 注意：不覆盖已有的确定结果（PASSED/FAILED），仅填补缺失或更新日程信息
-        existing_round = self._session.scalar(
-            select(InterviewRound).where(
-                InterviewRound.application_id == application.id,
-                InterviewRound.round_number == int(payload["interview_round"]),
-            )
-        )
-        result_for_round = (
-            existing_round.result
-            if existing_round is not None and existing_round.result is not InterviewResult.PENDING
-            else InterviewResult.PENDING
-        )
-        self._upsert_interview_round(
-            application_id=application.id,
-            round_number=int(payload["interview_round"]),
-            result=result_for_round,
-            interview_date=_review_datetime(payload.get("start_at")),
-            location=_optional_text(payload.get("location")),
-            meeting_url=_optional_text(payload.get("meeting_url")),
-            source=(
-                InterviewRoundSource.EMAIL
-                if review_task.source_email_id
-                else InterviewRoundSource.MANUAL
-            ),
-            source_email_id=review_task.source_email_id,
-            source_task_id=task.id,
-        )
-        application.status = ApplicationStatus.ACTIVE
-        self._session.flush()
-        return task
-
-    def _settle_assessment_tasks(
-        self,
-        application_id: int,
-        status: TaskStatus,
-    ) -> None:
-        """结算指定申请中状态为 PENDING/CONFIRMED 的测评类日程。"""
-        tasks = list(
-            self._session.scalars(
-                select(Task).where(
-                    Task.application_id == application_id,
-                    Task.task_type == TaskType.ASSESSMENT,
-                    Task.status.in_([TaskStatus.PENDING, TaskStatus.CONFIRMED]),
-                )
-            )
-        )
-        for t in tasks:
-            t.status = status
-
-    def _upsert_interview_round(
-        self,
-        *,
-        application_id: int,
-        round_number: int,
-        result: InterviewResult = InterviewResult.PENDING,
-        interview_date: datetime | None = None,
-        location: str | None = None,
-        meeting_url: str | None = None,
-        source: InterviewRoundSource = InterviewRoundSource.MANUAL,
-        source_email_id: int | None = None,
-        source_task_id: int | None = None,
-        notes: str | None = None,
-    ) -> InterviewRound:
-        """创建或更新面试轮次记录，并同步 JobApplication.interview_result 缓存。"""
-        existing = self._session.scalar(
-            select(InterviewRound).where(
-                InterviewRound.application_id == application_id,
-                InterviewRound.round_number == round_number,
-            )
-        )
-        if existing is not None:
-            existing.result = result
-            if interview_date is not None:
-                existing.interview_date = interview_date
-            if location is not None:
-                existing.location = location
-            if meeting_url is not None:
-                existing.meeting_url = meeting_url
-            if source_email_id is not None:
-                existing.source_email_id = source_email_id
-            if source_task_id is not None:
-                existing.source_task_id = source_task_id
-            if notes is not None:
-                existing.notes = notes
-            existing.source = source
-            self._session.flush()
-            self._sync_application_interview_result(application_id)
-            return existing
-
-        round_record = InterviewRound(
-            application_id=application_id,
-            round_number=round_number,
-            result=result,
-            interview_date=interview_date,
-            location=location,
-            meeting_url=meeting_url,
-            source=source,
-            source_email_id=source_email_id,
-            source_task_id=source_task_id,
-            notes=notes,
-        )
-        self._session.add(round_record)
-        self._session.flush()
-        self._sync_application_interview_result(application_id)
-        return round_record
-
-    def _sync_application_interview_result(self, application_id: int) -> None:
-        """将最新轮次的结果同步到 JobApplication.interview_result 缓存字段。"""
-        latest = self._session.scalar(
-            select(InterviewRound)
-            .where(InterviewRound.application_id == application_id)
-            .order_by(InterviewRound.round_number.desc())
-            .limit(1)
-        )
-        application = self._owned_application(application_id)
-        application.interview_result = latest.result if latest else None
-        self._session.flush()
-
-    def _sync_stage_result_to_rounds(
-        self,
-        application: JobApplication,
-        *,
-        previous: ApplicationStage,
-        proposed: ApplicationStage,
-        extracted_result: InterviewResult | None,
-        source_review_task_id: str,
-        source_email_id: int | None,
-    ) -> None:
-        """阶段变更中隐含的面试结果同步到 interview_rounds 的最新轮次。"""
-        # 确定本轮面试的轮次号
-        latest_round = self._session.scalar(
-            select(func.max(InterviewRound.round_number)).where(
-                InterviewRound.application_id == application.id,
-            )
-        )
-        # 仅在首次进入面试阶段时创建新轮次，同一阶段内只更新最新轮次
-        if proposed is ApplicationStage.INTERVIEW and previous is not ApplicationStage.INTERVIEW:
-            round_number = (latest_round or 0) + 1
-        else:
-            round_number = max(latest_round or 0, 1)
-
-        # 确定当前阶段对应的结果
-        if proposed is ApplicationStage.REJECTED and previous is ApplicationStage.INTERVIEW:
-            result = InterviewResult.FAILED
-        elif proposed is ApplicationStage.OFFER and previous is ApplicationStage.INTERVIEW:
-            result = InterviewResult.PASSED
-        elif extracted_result is not None:
-            # 同一面试阶段内，仅接受明确的通过/未通过结果，PENDING 不覆盖已有确定结果
-            if previous is ApplicationStage.INTERVIEW and proposed is ApplicationStage.INTERVIEW:
-                if extracted_result not in (InterviewResult.PASSED, InterviewResult.FAILED):
-                    return
-            result = extracted_result
-        else:
-            return
-
-        self._upsert_interview_round(
-            application_id=application.id,
-            round_number=round_number,
-            result=result,
-            source=(
-                InterviewRoundSource.EMAIL
-                if source_email_id
-                else InterviewRoundSource.MANUAL
-            ),
-            source_email_id=source_email_id,
-            notes=f"审核任务 {source_review_task_id} 阶段从 {previous.value} 迁移到 {proposed.value}",
-        )
-
     def _existing_response(self, task: ReviewTask) -> ReviewDecisionResponse:
-        execution = self._session.scalar(
-            select(ActionExecution)
-            .where(ActionExecution.review_task_id == task.id)
-            .order_by(ActionExecution.attempt_no.desc())
+        execution = self._latest_execution(task.id)
+        follow_up = self._session.scalar(
+            select(ReviewTask)
+            .where(
+                ReviewTask.parent_review_task_id == task.id,
+                ReviewTask.user_id == self._user_id,
+            )
+            .order_by(ReviewTask.created_at.asc())
             .limit(1)
         )
-        follow_up = None
-        if execution and execution.result:
-            follow_up_id = execution.result.get("follow_up_review_task_id")
-            if follow_up_id:
-                follow_up = self.get(follow_up_id)
+        task.execution_status = execution.status if execution is not None else None
         return ReviewDecisionResponse(
             review_task=task,
             execution=execution,
             follow_up_review_task=follow_up,
         )
+
+    def _latest_execution(self, task_id: str) -> ActionExecution | None:
+        return self._session.scalar(
+            select(ActionExecution)
+            .where(ActionExecution.review_task_id == task_id)
+            .order_by(ActionExecution.attempt_no.desc())
+            .limit(1)
+        )
+
+    def _attach_execution_states(self, tasks: list[ReviewTask]) -> None:
+        for task in tasks:
+            execution = self._latest_execution(task.id)
+            task.execution_status = execution.status if execution is not None else None
 
     def response_for_task(self, task_id: str) -> ReviewDecisionResponse:
         return self._existing_response(self.get(task_id))
@@ -1673,6 +1476,8 @@ class ReviewTaskService:
         *,
         follow_up: ReviewTask | None,
     ) -> None:
+        if task.workflow_run_id is None:
+            return
         workflow = self._session.get(WorkflowRun, task.workflow_run_id)
         if workflow is None:
             return
@@ -1689,10 +1494,7 @@ class ReviewTaskService:
         workflow.current_node = None
         workflow.status = (
             WorkflowRunStatus.SUCCEEDED
-            if task.status in {
-                ReviewTaskStatus.APPROVED,
-                ReviewTaskStatus.SUCCEEDED,
-            }
+            if review_decision_status(task) is ReviewDecisionStatus.APPROVED
             else WorkflowRunStatus.CANCELLED
         )
         workflow.finished_at = _utc_now()
@@ -1769,24 +1571,6 @@ def _interview_round_label(round_value: int) -> str:
     return f"{chinese}面" if chinese else f"第 {round_value} 轮面试"
 
 
-def _backfill_task_application(
-    session: Session,
-    *,
-    source_email_id: int,
-    application_id: int,
-) -> None:
-    """回填审核批准前由 TaskAutoCreationService 创建的、尚未关联申请的 Task。"""
-    from sqlalchemy import update as sql_update
-    session.execute(
-        sql_update(Task)
-        .where(
-            Task.source_email_id == source_email_id,
-            Task.application_id.is_(None),
-        )
-        .values(application_id=application_id)
-    )
-
-
 def _extracted_value(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -1798,6 +1582,7 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _review_datetime(value: Any) -> datetime | None:
+    """解析审核载荷中的带时区时间，并归一为数据库 UTC naive 值。"""
     if value is None or value == "":
         return None
     if not isinstance(value, (str, datetime)):
@@ -1813,6 +1598,26 @@ def _review_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ResourceConflictError("日程时间必须包含时区")
     return parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+def _json_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
+def _task_review_snapshot(task: Task) -> dict[str, object]:
+    return {
+        "title": task.title,
+        "description": task.description,
+        "start_at": _json_datetime(task.start_at),
+        "deadline_at": _json_datetime(task.deadline_at),
+        "source_timezone": task.source_timezone,
+        "location": task.location,
+        "meeting_url": task.meeting_url,
+        "status": task.status.value,
+    }
 
 
 def _score_candidate(

@@ -13,6 +13,7 @@ class WorkflowRun(TimestampMixin, Base):
     __tablename__ = "workflow_runs"
     __table_args__ = (
         UniqueConstraint("thread_id", name="uq_workflow_runs_thread_id"),
+        UniqueConstraint("active_email_id", name="uq_workflow_runs_active_email_id"),
         MYSQL_TABLE_OPTIONS,
     )
 
@@ -27,6 +28,11 @@ class WorkflowRun(TimestampMixin, Base):
         mysql.BIGINT(unsigned=True),
         ForeignKey("emails.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    active_email_id: Mapped[int | None] = mapped_column(
+        mysql.BIGINT(unsigned=True),
+        ForeignKey("emails.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     status: Mapped[WorkflowRunStatus] = mapped_column(
         varchar_enum(WorkflowRunStatus, name="workflow_run_status", length=32),

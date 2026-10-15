@@ -46,8 +46,8 @@ class InterviewRound(TimestampMixin, Base):
     status: Mapped[InterviewRoundStatus] = mapped_column(
         varchar_enum(InterviewRoundStatus, name="interview_round_status", length=16),
         nullable=False,
-        default=InterviewRoundStatus.SCHEDULED,
-        server_default=InterviewRoundStatus.SCHEDULED.value,
+        default=InterviewRoundStatus.PLANNED,
+        server_default=InterviewRoundStatus.PLANNED.value,
     )
     result: Mapped[InterviewResult] = mapped_column(
         varchar_enum(InterviewResult, name="interview_round_result", length=16),
@@ -87,6 +87,6 @@ class InterviewRound(TimestampMixin, Base):
 
     application: Mapped[JobApplication] = relationship(back_populates="interview_rounds")
     source_email: Mapped[Email | None] = relationship()
-    source_task: Mapped[Task | None] = relationship()
+    source_task: Mapped[Task | None] = relationship(foreign_keys=[source_task_id])
 
     __mapper_args__ = {"version_id_col": version}

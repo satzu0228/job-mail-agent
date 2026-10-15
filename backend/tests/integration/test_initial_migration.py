@@ -14,10 +14,10 @@ def make_alembic_config() -> Config:
     return config
 
 
-def test_email_authorization_migration_is_the_only_head() -> None:
+def test_compatibility_cleanup_migration_is_the_only_head() -> None:
     scripts = ScriptDirectory.from_config(make_alembic_config())
 
-    assert scripts.get_current_head() == "20260802_0010"
+    assert scripts.get_current_head() == "20261014_0014"
 
 
 def test_initial_migration_generates_ordered_mysql_sql() -> None:
@@ -61,6 +61,18 @@ def test_initial_migration_generates_ordered_mysql_sql() -> None:
     assert "ix_emails_current_imap_pointer" in sql
     assert "offer_result VARCHAR(16)" in sql
     assert "uq_automation_rule_runs_rule_email_analysis" in sql
+    assert "decision_status VARCHAR(16)" in sql
+    assert "parent_review_task_id CHAR(36)" in sql
+    assert "fk_review_tasks_parent_review_task_id_review_tasks" in sql
+    assert "interview_round_id BIGINT UNSIGNED" in sql
+    assert "fk_tasks_interview_round_id_interview_rounds" in sql
+    assert "'PLANNED', 'SCHEDULED', 'COMPLETED'" in sql
+    assert "active_email_id BIGINT UNSIGNED" in sql
+    assert "uq_workflow_runs_active_email_id" in sql
+    assert "DROP COLUMN interview_result" in sql
+    assert "DROP COLUMN interview_round" in sql
+    assert "DROP COLUMN status" in sql
+    assert "SET offer_result = 'PENDING'" in sql
 
 
 def test_initial_migration_downgrades_in_reverse_dependency_order() -> None:
@@ -107,3 +119,45 @@ def test_third_migration_drops_circular_foreign_keys_before_tables() -> None:
     review_table_position = sql.index("DROP TABLE review_tasks")
     workflow_table_position = sql.index("DROP TABLE workflow_runs")
     assert constraint_position < review_table_position < workflow_table_position
+
+
+def test_interview_authority_migration_downgrades_compatibly() -> None:
+    config = make_alembic_config()
+    output = StringIO()
+    config.output_buffer = output
+
+    command.downgrade(config, "20261011_0012:20261010_0011", sql=True)
+    sql = output.getvalue()
+
+    assert "DROP FOREIGN KEY fk_tasks_interview_round_id_interview_rounds" in sql
+    assert "DROP COLUMN interview_round_id" in sql
+    assert "status = 'SCHEDULED'" in sql
+
+
+def test_active_workflow_migration_downgrades_compatibly() -> None:
+    config = make_alembic_config()
+    output = StringIO()
+    config.output_buffer = output
+
+    command.downgrade(config, "20261011_0013:20261011_0012", sql=True)
+    sql = output.getvalue()
+
+    assert "DROP INDEX uq_workflow_runs_active_email_id" in sql
+    assert "DROP FOREIGN KEY fk_workflow_runs_active_email_id_emails" in sql
+    assert "DROP COLUMN active_email_id" in sql
+
+
+def test_compatibility_cleanup_migration_downgrades_with_backfill() -> None:
+    config = make_alembic_config()
+    output = StringIO()
+    config.output_buffer = output
+
+    command.downgrade(config, "20261014_0014:20261011_0013", sql=True)
+    sql = output.getvalue()
+
+    assert "ADD COLUMN status VARCHAR(32)" in sql
+    assert "SET status = decision_status" in sql
+    assert "ADD COLUMN interview_round SMALLINT UNSIGNED" in sql
+    assert "SET t.interview_round = ir.round_number" in sql
+    assert "ADD COLUMN interview_result VARCHAR(16)" in sql
+    assert "SET ja.interview_result = ir.result" in sql

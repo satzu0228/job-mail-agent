@@ -75,15 +75,6 @@ class EmailRepository:
         self._session = session
         self._user_id = user_id
 
-    def list(self, *, offset: int, limit: int) -> list[Email]:
-        statement = (
-            select(Email)
-            .join(EmailAccount, Email.account_id == EmailAccount.id)
-            .where(EmailAccount.user_id == self._user_id)
-            .order_by(Email.received_at.desc(), Email.id.desc())
-        )
-        return list(self._session.scalars(_paginate(statement, offset=offset, limit=limit)))
-
     def get(self, email_id: int) -> Email:
         statement = (
             select(Email)
@@ -205,14 +196,6 @@ class JobApplicationRepository:
         self._session = session
         self._user_id = user_id
 
-    def list(self, *, offset: int, limit: int) -> list[JobApplication]:
-        statement = (
-            select(JobApplication)
-            .where(JobApplication.user_id == self._user_id)
-            .order_by(JobApplication.updated_at.desc(), JobApplication.id.desc())
-        )
-        return list(self._session.scalars(_paginate(statement, offset=offset, limit=limit)))
-
     def get(self, application_id: int, *, for_update: bool = False) -> JobApplication:
         statement = select(JobApplication).where(
             JobApplication.id == application_id,
@@ -313,14 +296,6 @@ class TaskRepository:
     def __init__(self, session: Session, user_id: int) -> None:
         self._session = session
         self._user_id = user_id
-
-    def list(self, *, offset: int, limit: int) -> list[Task]:
-        statement = (
-            select(Task)
-            .where(Task.user_id == self._user_id)
-            .order_by(Task.start_at.asc(), Task.deadline_at.asc(), Task.id.desc())
-        )
-        return list(self._session.scalars(_paginate(statement, offset=offset, limit=limit)))
 
     def get(self, task_id: int, *, for_update: bool = False) -> Task:
         statement = select(Task).where(

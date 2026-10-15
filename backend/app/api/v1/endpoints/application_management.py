@@ -22,7 +22,7 @@ from app.application.schemas import (
     ReviewTaskRead,
 )
 from app.core.config import Settings, get_settings
-from app.domain.enums import ReviewActionType, ReviewTaskStatus
+from app.domain.enums import ReviewActionType, ReviewDecisionStatus
 from app.infrastructure.db.session import get_db_session
 
 router = APIRouter()
@@ -116,22 +116,6 @@ def propose_email_restore(
 
 
 @router.get(
-    "/review-tasks",
-    response_model=list[ReviewTaskRead],
-    tags=["review-tasks"],
-)
-def list_review_tasks(
-    use_case: ReviewDependency,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[ReviewTaskRead]:
-    return [
-        ReviewTaskRead.model_validate(item)
-        for item in use_case.list(offset=offset, limit=limit)
-    ]
-
-
-@router.get(
     "/review-tasks/query",
     response_model=ReviewTaskPage,
     tags=["review-tasks"],
@@ -141,7 +125,7 @@ def query_review_tasks(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     task_status: Annotated[
-        ReviewTaskStatus | None, Query(alias="status")
+        ReviewDecisionStatus | None, Query(alias="status")
     ] = None,
     action_type: ReviewActionType | None = None,
 ) -> ReviewTaskPage:

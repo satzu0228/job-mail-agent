@@ -14,7 +14,6 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/email-accounts/{account_id}/sync",
         "/api/v1/email-accounts/{account_id}/active",
         "/api/v1/email-accounts/{account_id}/authorization-code",
-        "/api/v1/emails",
         "/api/v1/emails/query",
         "/api/v1/emails/{email_id}",
         "/api/v1/emails/{email_id}/attachments/{attachment_index}",
@@ -32,7 +31,6 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/job-applications/{application_id}/interview-result",
         "/api/v1/job-applications/{application_id}/next-interview",
         "/api/v1/tasks/{task_id}/withdraw-application",
-        "/api/v1/review-tasks",
         "/api/v1/review-tasks/query",
         "/api/v1/review-tasks/{task_id}",
         "/api/v1/review-tasks/{task_id}/decision",
@@ -45,6 +43,10 @@ def test_swagger_and_third_phase_routes_are_available(client: TestClient) -> Non
         "/api/v1/emails/{email_id}/generate-reply",
     }
     assert expected_paths <= paths.keys()
+    assert "/api/v1/emails" not in paths
+    assert "/api/v1/review-tasks" not in paths
+    assert "get" not in paths["/api/v1/job-applications"]
+    assert "get" not in paths["/api/v1/tasks"]
 
 
 def test_basic_api_does_not_expose_critical_state_or_send_actions(
@@ -54,11 +56,13 @@ def test_basic_api_does_not_expose_critical_state_or_send_actions(
     components = schema["components"]["schemas"]
 
     application_update = components["JobApplicationUpdate"]["properties"]
+    review_read = components["ReviewTaskRead"]["properties"]
     draft_update = components["ReplyDraftUpdate"]["properties"]
     paths = schema["paths"]
 
     assert "current_stage" not in application_update
     assert "status" not in application_update
+    assert "status" not in review_read
     assert set(draft_update) == {"reviewed_body"}
     send_paths = {path for path in paths if "send" in path}
     assert send_paths == {"/api/v1/reply-drafts/{draft_id}/send"}

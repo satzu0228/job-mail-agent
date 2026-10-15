@@ -3,14 +3,16 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.v1.endpoints.workflow import WorkflowDependency
 from app.application.automation_rules import AutomationRuleService
 from app.application.crud import BusinessCrudService
 from app.application.email_access import (
     EmailAccessService,
     mask_email_address,
 )
+from app.application.mailbox_processing import SyncAndProcessMailbox
 from app.application.reminders import ReminderService
 from app.application.schemas import (
     ApplicationEventPage,
@@ -30,7 +32,6 @@ from app.application.schemas import (
     EmailListItem,
     EmailPage,
     EmailSyncRequest,
-    EmailSyncResult,
     InterviewRoundRead,
     InterviewRoundResultResponse,
     InterviewRoundResultUpdate,
@@ -45,6 +46,7 @@ from app.application.schemas import (
     JobApplicationReopen,
     JobApplicationStageTransition,
     JobApplicationUpdate,
+    MailboxProcessingResult,
     ReminderRead,
     ReminderReadUpdate,
     ReplyDraftCreate,
@@ -111,6 +113,35 @@ def email_access_service(
 
 
 EmailAccessDependency = Annotated[EmailAccessService, Depends(email_access_service)]
+
+
+def mailbox_processing_service(
+    session: SessionDependency,
+    settings: SettingsDependency,
+    workflow: WorkflowDependency,
+) -> SyncAndProcessMailbox:
+    factory = sessionmaker(
+        bind=session.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+    def email_access_factory(child_session: Session) -> EmailAccessService:
+        return EmailAccessService(
+            child_session,
+            settings.demo_user_id,
+            timeout_seconds=settings.email_connect_timeout_seconds,
+            default_sync_limit=settings.email_sync_limit,
+            max_message_bytes=settings.email_max_message_bytes,
+        )
+
+    return SyncAndProcessMailbox(factory, email_access_factory, workflow.start)
+
+
+MailboxProcessingDependency = Annotated[
+    SyncAndProcessMailbox,
+    Depends(mailbox_processing_service),
+]
 
 
 def _account_read(account: EmailAccount) -> EmailAccountRead:
@@ -231,27 +262,15 @@ def test_email_account_connection(
 
 @router.post(
     "/email-accounts/{account_id}/sync",
-    response_model=EmailSyncResult,
+    response_model=MailboxProcessingResult,
     tags=["email-accounts"],
 )
 def sync_email_account(
     account_id: int,
-    use_case: EmailAccessDependency,
+    use_case: MailboxProcessingDependency,
     payload: EmailSyncRequest | None = None,
-) -> EmailSyncResult:
-    return use_case.sync(account_id, limit=payload.limit if payload else None)
-
-
-@router.get("/emails", response_model=list[EmailListItem], tags=["emails"])
-def list_emails(
-    use_case: ServiceDependency,
-    offset: PageOffset = 0,
-    limit: PageLimit = 50,
-) -> list[EmailListItem]:
-    return [
-        EmailListItem.model_validate(item)
-        for item in use_case.emails.list(offset=offset, limit=limit)
-    ]
+) -> MailboxProcessingResult:
+    return use_case.execute(account_id, limit=payload.limit if payload else None)
 
 
 @router.get("/emails/query", response_model=EmailPage, tags=["emails"])
@@ -332,22 +351,6 @@ def refresh_email_content(
     use_case: EmailAccessDependency,
 ) -> EmailDetail:
     return EmailDetail.model_validate(use_case.refresh_content(email_id))
-
-
-@router.get(
-    "/job-applications",
-    response_model=list[JobApplicationRead],
-    tags=["job-applications"],
-)
-def list_applications(
-    use_case: ServiceDependency,
-    offset: PageOffset = 0,
-    limit: PageLimit = 50,
-) -> list[JobApplicationRead]:
-    return [
-        JobApplicationRead.model_validate(item)
-        for item in use_case.applications.list(offset=offset, limit=limit)
-    ]
 
 
 @router.get(
@@ -519,18 +522,6 @@ def reopen_application(
     return JobApplicationRead.model_validate(
         use_case.reopen_application(application_id, payload)
     )
-
-
-@router.get("/tasks", response_model=list[TaskRead], tags=["tasks"])
-def list_tasks(
-    use_case: ServiceDependency,
-    offset: PageOffset = 0,
-    limit: PageLimit = 50,
-) -> list[TaskRead]:
-    return [
-        TaskRead.model_validate(item)
-        for item in use_case.tasks.list(offset=offset, limit=limit)
-    ]
 
 
 @router.get("/tasks/query", response_model=TaskPage, tags=["tasks"])

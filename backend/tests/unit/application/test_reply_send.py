@@ -5,7 +5,7 @@ from app.application.schemas import ReplySendRequest
 from app.domain.enums import (
     ExecutionStatus,
     ReplyDraftStatus,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     TransportSecurity,
 )
 
@@ -65,7 +65,7 @@ def _command() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     )
     task = SimpleNamespace(
         id="review-reply",
-        status=ReviewTaskStatus.APPROVED,
+        decision_status=ReviewDecisionStatus.APPROVED,
     )
     return draft, task, email
 
@@ -109,7 +109,7 @@ def test_successful_send_is_reused_without_second_smtp_call() -> None:
 
     assert first is second
     assert first.status is ExecutionStatus.SUCCEEDED
-    assert task.status is ReviewTaskStatus.SUCCEEDED
+    assert task.decision_status is ReviewDecisionStatus.APPROVED
     assert mailer.calls == 1
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.application.automation_rules import AutomationRuleService
 from app.application.email_access import EmailAccessService, EmailSyncError
+from app.application.mailbox_processing import SyncAndProcessMailbox
 from app.application.reminders import ReminderService
 from app.application.task_auto_creation import TaskAutoCreationService
 from app.infrastructure.db.models import AutomationRule
@@ -24,7 +25,7 @@ class AutomationCycleResult:
     failed_accounts: dict[int, str] = field(default_factory=dict)
     failed_workflows: dict[int, str] = field(default_factory=dict)
     reminder_ids: list[int] = field(default_factory=list)
-    created_task_ids: list[int] = field(default_factory=list)
+    created_task_review_ids: list[str] = field(default_factory=list)
     archive_review_task_ids: list[str] = field(default_factory=list)
     failed_rules: dict[int, str] = field(default_factory=dict)
 
@@ -43,12 +44,17 @@ class AutomationService:
         self._user_id = user_id
         self._email_access_factory = email_access_factory
         self._workflow_starter = workflow_starter
+        self._mailbox_processor = SyncAndProcessMailbox(
+            session_factory,
+            email_access_factory,
+            workflow_starter,
+        )
         self._reminder_lead_minutes = reminder_lead_minutes
 
     def run_cycle(self, *, now: datetime | None = None) -> AutomationCycleResult:
         current = now or _utc_now()
         reminder_ids = self._generate_reminders(current)
-        task_ids = self._create_tasks_from_analyses()
+        task_review_ids = self._create_task_reviews_from_analyses()
         account_ids = self._claim_due_accounts(current)
         synced: list[int] = []
         created_email_ids: list[int] = []
@@ -58,8 +64,7 @@ class AutomationService:
 
         for account_id in account_ids:
             try:
-                with self._session_factory() as session:
-                    result = self._email_access_factory(session).sync(account_id)
+                result = self._mailbox_processor.execute(account_id)
                 synced.append(account_id)
                 created_email_ids.extend(result.created_email_ids)
                 self._record_attempt(account_id, current)
@@ -68,13 +73,12 @@ class AutomationService:
                 self._record_attempt(account_id, current)
                 continue
 
-            for email_id in result.created_email_ids:
-                try:
-                    self._workflow_starter(email_id)
-                    workflow_email_ids.append(email_id)
-                except Exception as exc:
-                    # 单封模型失败不阻塞同批其他新邮件，错误详情由工作流自身留痕。
-                    failed_workflows[email_id] = str(exc)[:500]
+            failed_workflows.update(result.failed_workflows)
+            workflow_email_ids.extend(
+                email_id
+                for email_id in result.created_email_ids
+                if email_id not in result.failed_workflows
+            )
 
         archive_review_task_ids, failed_rules = self._run_enabled_archive_rules()
 
@@ -86,7 +90,7 @@ class AutomationService:
             failed_accounts=failed_accounts,
             failed_workflows=failed_workflows,
             reminder_ids=reminder_ids,
-            created_task_ids=task_ids,
+            created_task_review_ids=task_review_ids,
             archive_review_task_ids=archive_review_task_ids,
             failed_rules=failed_rules,
         )
@@ -136,12 +140,12 @@ class AutomationService:
             )
             return [item.id for item in reminders]
 
-    def _create_tasks_from_analyses(self) -> list[int]:
+    def _create_task_reviews_from_analyses(self) -> list[str]:
         with self._session_factory() as session:
-            tasks = TaskAutoCreationService(
+            reviews = TaskAutoCreationService(
                 session, self._user_id,
-            ).create_tasks_from_analyses()
-            return [task.id for task in tasks]
+            ).create_task_reviews_from_analyses()
+            return [review.id for review in reviews]
 
     def _run_enabled_archive_rules(self) -> tuple[list[str], dict[int, str]]:
         created: list[str] = []

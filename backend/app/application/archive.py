@@ -9,21 +9,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.application_management import ReviewTaskService
+from app.application.review_decisions import review_decision_status
 from app.application.schemas import ReviewDecision, ReviewDecisionResponse
 from app.domain.enums import (
     ArchiveStatus,
     ExecutionStatus,
     ExecutorType,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     RiskLevel,
-    WorkflowRunStatus,
 )
 from app.infrastructure.db.models import (
     ActionExecution,
     Email,
     ReviewTask,
-    WorkflowRun,
 )
 from app.infrastructure.db.repositories import (
     EmailRepository,
@@ -41,9 +40,6 @@ from app.infrastructure.security import (
 )
 
 ARCHIVE_FOLDER = "JobMailArchive"
-ARCHIVE_GRAPH_VERSION = "phase-11-archive.v1"
-
-
 class CredentialResolver(Protocol):
     def resolve(self, credential_ciphertext: str | None) -> str: ...
 
@@ -104,11 +100,10 @@ class EmailArchiveService:
             existing = self._session.scalar(
                 select(ReviewTask).where(ReviewTask.idempotency_key == key)
             )
-            if existing is not None and existing.status not in {
-                ReviewTaskStatus.REJECTED,
-                ReviewTaskStatus.CANCELLED,
-                ReviewTaskStatus.EXPIRED,
-                ReviewTaskStatus.FAILED,
+            if existing is not None and review_decision_status(existing) not in {
+                ReviewDecisionStatus.REJECTED,
+                ReviewDecisionStatus.CANCELLED,
+                ReviewDecisionStatus.EXPIRED,
             }:
                 return existing
             if existing is not None:
@@ -125,28 +120,10 @@ class EmailArchiveService:
                     raise ResourceConflictError("只有已归档邮件可以恢复")
                 target_folder = email.previous_folder or "INBOX"
 
-            now = _utc_now()
-            run_id = str(uuid4())
-            workflow = WorkflowRun(
-                id=run_id,
-                thread_id=str(uuid4()),
-                user_id=self._user_id,
-                email_id=email.id,
-                status=WorkflowRunStatus.WAITING_REVIEW,
-                current_node="email_move_review",
-                graph_version=ARCHIVE_GRAPH_VERSION,
-                model_provider="deterministic",
-                model_name="imap-move",
-                prompt_versions={},
-                agent_trace=[],
-                started_at=now,
-            )
-            self._session.add(workflow)
-            self._session.flush()
             task = ReviewTask(
                 id=str(uuid4()),
                 user_id=self._user_id,
-                workflow_run_id=run_id,
+                workflow_run_id=None,
                 source_email_id=email.id,
                 application_id=email.application_id,
                 action_type=action_type,
@@ -158,13 +135,11 @@ class EmailArchiveService:
                     "source_uid": source_uid,
                     "target_folder": target_folder,
                 },
-                status=ReviewTaskStatus.PENDING,
                 idempotency_key=key,
                 resource_version=source_uid,
             )
             self._session.add(task)
             self._session.flush()
-            workflow.pending_review_task_id = task.id
             if action_type is ReviewActionType.ARCHIVE_EMAIL:
                 email.archive_status = ArchiveStatus.PROPOSED
             return task
@@ -182,7 +157,7 @@ class EmailArchiveService:
         )
         if not recorded.should_resume:
             return service.response_for_task(task_id)
-        if recorded.task.status is ReviewTaskStatus.REJECTED:
+        if review_decision_status(recorded.task) is ReviewDecisionStatus.REJECTED:
             self._reset_after_rejection(recorded.task)
             return service.response_for_task(task_id)
         return self.execute(task_id)
@@ -203,9 +178,10 @@ class EmailArchiveService:
                 ExecutionStatus.RUNNING,
             }:
                 return service.response_for_task(task_id)
-        if task.status is not ReviewTaskStatus.APPROVED:
+        decision_status = review_decision_status(task)
+        if decision_status is not ReviewDecisionStatus.APPROVED:
             raise ResourceConflictError(
-                f"审核任务当前状态 {task.status.value} 不允许执行"
+                f"审核任务当前状态 {decision_status.value} 不允许执行"
             )
 
         email = self._emails.get(task.source_email_id or 0)
@@ -222,7 +198,6 @@ class EmailArchiveService:
             status=ExecutionStatus.RUNNING,
             started_at=_utc_now(),
         )
-        task.status = ReviewTaskStatus.EXECUTING
         self._session.add(execution)
         self._session.commit()
 
@@ -243,12 +218,10 @@ class EmailArchiveService:
             execution.status = ExecutionStatus.UNKNOWN
             execution.error_code = "IMAP_MOVE_UNKNOWN"
             execution.error_message = str(exc)[:500]
-            task.status = ReviewTaskStatus.UNKNOWN
         except (EmailConnectionError, CredentialNotConfiguredError) as exc:
             execution.status = ExecutionStatus.FAILED
             execution.error_code = "IMAP_MOVE_FAILED"
             execution.error_message = str(exc)[:500]
-            task.status = ReviewTaskStatus.FAILED
             if task.action_type is ReviewActionType.ARCHIVE_EMAIL:
                 email.archive_status = ArchiveStatus.FAILED
         else:
@@ -263,9 +236,7 @@ class EmailArchiveService:
                 "uid_validity": result.uid_validity,
                 "uid": result.uid,
             }
-            task.status = ReviewTaskStatus.SUCCEEDED
         execution.finished_at = _utc_now()
-        self._update_workflow(task, execution)
         self._session.commit()
         return service.response_for_task(task_id)
 
@@ -335,28 +306,6 @@ class EmailArchiveService:
             "uid": result.uid,
         }
         self._session.commit()
-
-    def _update_workflow(
-        self,
-        task: ReviewTask,
-        execution: ActionExecution,
-    ) -> None:
-        workflow = self._session.get(WorkflowRun, task.workflow_run_id)
-        if workflow is None:
-            return
-        workflow.pending_review_task_id = None
-        workflow.current_node = None
-        workflow.finished_at = _utc_now()
-        if execution.status is ExecutionStatus.SUCCEEDED:
-            workflow.status = WorkflowRunStatus.SUCCEEDED
-        elif execution.status is ExecutionStatus.UNKNOWN:
-            workflow.status = WorkflowRunStatus.FAILED
-            workflow.error_code = "IMAP_MOVE_UNKNOWN"
-            workflow.error_message = execution.error_message
-        else:
-            workflow.status = WorkflowRunStatus.FAILED
-            workflow.error_code = "IMAP_MOVE_FAILED"
-            workflow.error_message = execution.error_message
 
     def _latest_execution(self, task_id: str) -> ActionExecution | None:
         return self._session.scalar(

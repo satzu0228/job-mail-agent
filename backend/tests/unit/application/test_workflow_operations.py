@@ -4,7 +4,7 @@ from app.application.schemas import ReviewDecisionResponse, ReviewTaskRead
 from app.application.workflow import DatabaseWorkflowOperations, JobMailWorkflowService
 from app.domain.enums import (
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     WorkflowRunStatus,
 )
 
@@ -25,7 +25,7 @@ def test_execute_review_captures_task_fields_before_rollback(monkeypatch) -> Non
     session = FakeSession()
 
     class ExpiringTask:
-        status = ReviewTaskStatus.APPROVED
+        decision_status = ReviewDecisionStatus.APPROVED
 
         @property
         def action_type(self):

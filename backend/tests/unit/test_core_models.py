@@ -64,7 +64,6 @@ def test_enum_fields_generate_named_check_constraints() -> None:
         "ck_job_applications_application_stage",
         "ck_job_applications_application_status",
         "ck_job_applications_application_source",
-        "ck_job_applications_interview_result",
         "ck_job_applications_offer_result",
     }
     actual_names = {

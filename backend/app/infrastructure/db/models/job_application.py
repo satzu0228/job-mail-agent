@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, String, Text, text
+from sqlalchemy import ForeignKey, Index, String, Text, select, text
 from sqlalchemy.dialects import mysql
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.domain.enums import (
     ApplicationSource,
@@ -15,6 +15,7 @@ from app.domain.enums import (
     OfferResult,
 )
 from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin, varchar_enum
+from app.infrastructure.db.models.interview_round import InterviewRound
 
 if TYPE_CHECKING:
     from app.infrastructure.db.models.email import Email
@@ -66,9 +67,13 @@ class JobApplication(TimestampMixin, Base):
         default=ApplicationStatus.ACTIVE,
         server_default=ApplicationStatus.ACTIVE.value,
     )
-    interview_result: Mapped[InterviewResult | None] = mapped_column(
-        varchar_enum(InterviewResult, name="interview_result", length=16),
-        nullable=True,
+    interview_result: Mapped[InterviewResult | None] = column_property(
+        select(InterviewRound.result)
+        .where(InterviewRound.application_id == id)
+        .order_by(InterviewRound.round_number.desc())
+        .limit(1)
+        .correlate_except(InterviewRound)
+        .scalar_subquery()
     )
     offer_result: Mapped[OfferResult | None] = mapped_column(
         varchar_enum(OfferResult, name="offer_result", length=16),

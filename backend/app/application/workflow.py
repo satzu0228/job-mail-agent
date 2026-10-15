@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from langgraph.types import Command
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agents.application.schemas import ApplicationAgentOutput, ApplicationCandidate
@@ -28,6 +29,7 @@ from app.application.email_analysis import (
     prepare_email,
 )
 from app.application.reply import ReplyGenerationService, ReplyRunner, ReplySendService
+from app.application.review_decisions import review_decision_status
 from app.application.schemas import (
     ReplyGenerationRequest,
     ReplySendRequest,
@@ -36,7 +38,13 @@ from app.application.schemas import (
     ReviewTaskRead,
     WorkflowRunRead,
 )
-from app.domain.enums import EmailParseStatus, ExecutionStatus, ReviewActionType, ReviewTaskStatus, WorkflowRunStatus
+from app.domain.enums import (
+    EmailParseStatus,
+    ExecutionStatus,
+    ReviewActionType,
+    ReviewDecisionStatus,
+    WorkflowRunStatus,
+)
 from app.infrastructure.db.models.email_analysis import EmailAnalysis
 from app.infrastructure.db.models.reply_draft import ReplyDraft
 from app.infrastructure.db.models.review_task import ReviewTask
@@ -249,11 +257,11 @@ class DatabaseWorkflowOperations:
         with self._session_factory() as session:
             service = ReviewTaskService(session, self._user_id)
             task = service.get(review_task_id)
-            status = task.status
+            status = review_decision_status(task)
             action_type = task.action_type
             draft_id = task.draft_id
             session.rollback()
-            if status is ReviewTaskStatus.REJECTED:
+            if status is ReviewDecisionStatus.REJECTED:
                 return ReviewExecutionOutcome(
                     review_task_id=review_task_id,
                     action_type=action_type.value,
@@ -329,6 +337,7 @@ class DatabaseWorkflowOperations:
             workflow.status = status
             workflow.current_node = None
             workflow.pending_review_task_id = None
+            workflow.active_email_id = None
             workflow.finished_at = _utc_now()
 
     def fail(
@@ -344,6 +353,7 @@ class DatabaseWorkflowOperations:
             workflow.status = WorkflowRunStatus.FAILED
             workflow.current_node = node
             workflow.pending_review_task_id = None
+            workflow.active_email_id = None
             workflow.error_code = error_code[:64]
             workflow.error_message = error_message[:500]
             workflow.agent_trace = [
@@ -431,23 +441,30 @@ class JobMailWorkflowService:
         run_id = str(uuid4())
         thread_id = str(uuid4())
         now = _utc_now()
-        with self._session_factory() as session, session.begin():
-            EmailRepository(session, self._user_id).get(email_id)
-            workflow = WorkflowRun(
-                id=run_id,
-                thread_id=thread_id,
-                user_id=self._user_id,
-                email_id=email_id,
-                status=WorkflowRunStatus.RUNNING,
-                current_node="load_email",
-                graph_version=GRAPH_VERSION,
-                model_provider=self._model_provider,
-                model_name=self._model_name,
-                prompt_versions=self._prompt_versions,
-                agent_trace=[],
-                started_at=now,
-            )
-            session.add(workflow)
+        try:
+            with self._session_factory() as session, session.begin():
+                EmailRepository(session, self._user_id).get(email_id)
+                workflow = WorkflowRun(
+                    id=run_id,
+                    thread_id=thread_id,
+                    user_id=self._user_id,
+                    email_id=email_id,
+                    active_email_id=email_id,
+                    status=WorkflowRunStatus.RUNNING,
+                    current_node="load_email",
+                    graph_version=GRAPH_VERSION,
+                    model_provider=self._model_provider,
+                    model_name=self._model_name,
+                    prompt_versions=self._prompt_versions,
+                    agent_trace=[],
+                    started_at=now,
+                )
+                session.add(workflow)
+        except IntegrityError:
+            existing = self._active_run_for_email(email_id)
+            if existing is None:
+                raise
+            return WorkflowRunRead.model_validate(existing)
 
         initial = WorkflowState(
             workflow_run_id=run_id,
@@ -473,6 +490,12 @@ class JobMailWorkflowService:
     ) -> ReviewDecisionResponse:
         with self._session_factory() as session:
             task = ReviewTaskService(session, self._user_id).get(task_id)
+            if task.workflow_run_id is None:
+                session.rollback()
+                return ReviewTaskService(session, self._user_id).decide(
+                    task_id,
+                    decision,
+                )
             workflow = self._owned_workflow(session, task.workflow_run_id)
             if workflow.graph_version != GRAPH_VERSION:
                 session.rollback()
@@ -485,9 +508,9 @@ class JobMailWorkflowService:
                 and workflow.pending_review_task_id == task.id
             )
             thread_id = workflow.thread_id
-            task_status = task.status
+            task_status = review_decision_status(task)
 
-        if task_status is ReviewTaskStatus.PENDING:
+        if task_status is ReviewDecisionStatus.PENDING:
             with self._session_factory() as session:
                 recorded = ReviewTaskService(
                     session,
@@ -499,15 +522,14 @@ class JobMailWorkflowService:
                 )
                 should_resume = should_resume and recorded.should_resume
         elif task_status not in {
-            ReviewTaskStatus.APPROVED,
-            ReviewTaskStatus.REJECTED,
-            ReviewTaskStatus.SUCCEEDED,
+            ReviewDecisionStatus.APPROVED,
+            ReviewDecisionStatus.REJECTED,
         }:
             raise ResourceConflictError(
                 f"审核任务当前状态 {task_status.value} 不允许恢复"
             )
 
-        if should_resume and task_status is not ReviewTaskStatus.SUCCEEDED:
+        if should_resume:
             snapshot = self._graph.get_state(
                 {"configurable": {"thread_id": thread_id}}
             )
@@ -569,7 +591,7 @@ class JobMailWorkflowService:
                     session,
                     current_response.review_task.workflow_run_id,
                 )
-                follow_up = self._resolve_follow_up(
+                follow_up = self._current_follow_up(
                     current_response, workflow, review_service
                 )
                 if follow_up is None:
@@ -577,7 +599,7 @@ class JobMailWorkflowService:
                 if follow_up.action_type == ReviewActionType.SEND_REPLY:
                     # SEND_REPLY requires explicit human confirmation.
                     break
-                if follow_up.status != ReviewTaskStatus.PENDING:
+                if review_decision_status(follow_up) is not ReviewDecisionStatus.PENDING:
                     break
                 follow_up_id = follow_up.id
                 follow_up_version = follow_up.version
@@ -623,14 +645,12 @@ class JobMailWorkflowService:
         return auto_approved
 
     @staticmethod
-    def _resolve_follow_up(
+    def _current_follow_up(
         response: ReviewDecisionResponse,
         workflow: WorkflowRun,
         review_service: ReviewTaskService,
     ) -> ReviewTaskRead | None:
-        """从响应或 workflow 中解析当前等待的 follow-up 审核。"""
-        if response.follow_up_review_task is not None:
-            return response.follow_up_review_task
+        """以工作流当前中断点为准解析 follow-up，避免使用过期响应。"""
         pending_id = workflow.pending_review_task_id
         if (
             workflow.status is not WorkflowRunStatus.WAITING_REVIEW
@@ -638,6 +658,11 @@ class JobMailWorkflowService:
             or pending_id == response.review_task.id
         ):
             return None
+        if (
+            response.follow_up_review_task is not None
+            and response.follow_up_review_task.id == pending_id
+        ):
+            return response.follow_up_review_task
         return ReviewTaskRead.model_validate(review_service.get(pending_id))
 
     @staticmethod
@@ -647,27 +672,15 @@ class JobMailWorkflowService:
         review_service: ReviewTaskService,
     ) -> ReviewDecisionResponse:
         """返回图恢复后真正等待用户处理的下一项审核。"""
-        pending_id = workflow.pending_review_task_id
-        if (
-            workflow.status is not WorkflowRunStatus.WAITING_REVIEW
-            or not pending_id
-            or pending_id == response.review_task.id
-        ):
+        follow_up = JobMailWorkflowService._current_follow_up(
+            response,
+            workflow,
+            review_service,
+        )
+        if follow_up is None or follow_up == response.follow_up_review_task:
             return response
-
-        # 如果已有 follow_up 且与当前等待的一致，无需更新。
-        if (
-            response.follow_up_review_task is not None
-            and response.follow_up_review_task.id == pending_id
-        ):
-            return response
-
         return response.model_copy(
-            update={
-                "follow_up_review_task": ReviewTaskRead.model_validate(
-                    review_service.get(pending_id)
-                )
-            }
+            update={"follow_up_review_task": follow_up}
         )
 
     def _active_run_for_email(self, email_id: int) -> WorkflowRun | None:
@@ -677,15 +690,7 @@ class JobMailWorkflowService:
                 select(WorkflowRun)
                 .where(
                     WorkflowRun.user_id == self._user_id,
-                    WorkflowRun.email_id == email_id,
-                    WorkflowRun.graph_version == GRAPH_VERSION,
-                    WorkflowRun.status.in_(
-                        (
-                            WorkflowRunStatus.PENDING,
-                            WorkflowRunStatus.RUNNING,
-                            WorkflowRunStatus.WAITING_REVIEW,
-                        )
-                    ),
+                    WorkflowRun.active_email_id == email_id,
                 )
                 .order_by(WorkflowRun.started_at.desc())
                 .limit(1)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.domain.enums import (
     DecisionSource,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     RiskLevel,
 )
 from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin, varchar_enum
@@ -27,10 +27,16 @@ class ReviewTask(TimestampMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    workflow_run_id: Mapped[str] = mapped_column(
+    workflow_run_id: Mapped[str | None] = mapped_column(
         mysql.CHAR(36),
         ForeignKey("workflow_runs.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
+    )
+    parent_review_task_id: Mapped[str | None] = mapped_column(
+        mysql.CHAR(36),
+        ForeignKey("review_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     source_email_id: Mapped[int | None] = mapped_column(
         mysql.BIGINT(unsigned=True),
@@ -58,11 +64,15 @@ class ReviewTask(TimestampMixin, Base):
         JSON, nullable=False, default=dict
     )
     reviewed_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    status: Mapped[ReviewTaskStatus] = mapped_column(
-        varchar_enum(ReviewTaskStatus, name="review_task_status", length=32),
+    decision_status: Mapped[ReviewDecisionStatus] = mapped_column(
+        varchar_enum(
+            ReviewDecisionStatus,
+            name="review_decision_status",
+            length=16,
+        ),
         nullable=False,
-        default=ReviewTaskStatus.PENDING,
-        server_default=ReviewTaskStatus.PENDING.value,
+        default=ReviewDecisionStatus.PENDING,
+        server_default=ReviewDecisionStatus.PENDING.value,
     )
     decision_source: Mapped[DecisionSource | None] = mapped_column(
         varchar_enum(DecisionSource, name="review_decision_source", length=16),

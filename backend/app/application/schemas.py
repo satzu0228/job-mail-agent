@@ -7,6 +7,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    computed_field,
     field_serializer,
     field_validator,
     model_validator,
@@ -18,6 +19,7 @@ from app.agents.application.schemas import (
 )
 from app.agents.classification.schemas import ClassificationOutput
 from app.agents.extraction.schemas import ExtractionOutput
+from app.domain.application.policy import ApplicationStatePolicy
 from app.domain.enums import (
     ApplicationSource,
     ApplicationStage,
@@ -33,11 +35,13 @@ from app.domain.enums import (
     ExecutionStatus,
     ExecutorType,
     InterviewResult,
+    InterviewRoundStatus,
     OfferResult,
     ReminderStatus,
     ReplyDraftStatus,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
+    ReviewDisplayStatus,
     RiskLevel,
     TaskStatus,
     TaskType,
@@ -151,6 +155,11 @@ class EmailSyncResult(ApiSchema):
     created_email_ids: list[int] = Field(default_factory=list)
 
 
+class MailboxProcessingResult(EmailSyncResult):
+    workflow_run_ids: list[str] = Field(default_factory=list)
+    failed_workflows: dict[int, str] = Field(default_factory=dict)
+
+
 class EmailAnalyzeResponse(UtcResponseSchema):
     analysis_id: int
     email_id: int
@@ -260,6 +269,7 @@ class JobApplicationStageTransition(ApiSchema):
 class JobApplicationInterviewResultUpdate(ApiSchema):
     version: int = Field(gt=0)
     result: InterviewResult
+    close_application: bool = True
     reason: str = Field(min_length=1, max_length=1000)
 
     @field_validator("reason")
@@ -353,6 +363,34 @@ class JobApplicationRead(UtcResponseSchema):
     created_at: datetime
     updated_at: datetime
 
+    @computed_field
+    @property
+    def allowed_transitions(self) -> list[ApplicationStage]:
+        if self.status is not ApplicationStatus.ACTIVE:
+            return []
+        return [
+            stage
+            for stage in ApplicationStage
+            if ApplicationStatePolicy.validate_stage_transition(
+                self.current_stage,
+                stage,
+            ).can_apply
+        ]
+
+    @computed_field
+    @property
+    def allowed_actions(self) -> list[str]:
+        if self.status is not ApplicationStatus.ACTIVE:
+            return ["REOPEN_APPLICATION"]
+        actions = ["UPDATE_DETAILS"]
+        if self.allowed_transitions:
+            actions.append("TRANSITION_STAGE")
+        if self.current_stage is ApplicationStage.INTERVIEW:
+            actions.extend(["RECORD_INTERVIEW_RESULT", "SCHEDULE_NEXT_INTERVIEW"])
+        if self.current_stage is ApplicationStage.OFFER:
+            actions.append("RECORD_OFFER_RESULT")
+        return actions
+
 
 class JobApplicationPage(ApiSchema):
     items: list[JobApplicationRead]
@@ -401,10 +439,24 @@ class ReviewDecision(ApiSchema):
     auto_approve: bool = False
 
 
+def _review_display_status(
+    decision: ReviewDecisionStatus,
+    execution: ExecutionStatus | None,
+) -> ReviewDisplayStatus:
+    if decision is not ReviewDecisionStatus.APPROVED:
+        return ReviewDisplayStatus(decision.value)
+    if execution is None or execution is ExecutionStatus.PENDING:
+        return ReviewDisplayStatus.APPROVED
+    if execution is ExecutionStatus.RUNNING:
+        return ReviewDisplayStatus.APPROVED_EXECUTING
+    return ReviewDisplayStatus(f"APPROVED_{execution.value}")
+
+
 class ReviewTaskRead(UtcResponseSchema):
     id: str
     user_id: int
-    workflow_run_id: str
+    workflow_run_id: str | None
+    parent_review_task_id: str | None = None
     source_email_id: int | None
     application_id: int | None
     draft_id: int | None
@@ -412,7 +464,9 @@ class ReviewTaskRead(UtcResponseSchema):
     risk_level: RiskLevel
     proposed_payload: dict[str, Any]
     reviewed_payload: dict[str, Any] | None
-    status: ReviewTaskStatus
+    decision_status: ReviewDecisionStatus
+    execution_status: ExecutionStatus | None = None
+    display_status: ReviewDisplayStatus
     decision_source: DecisionSource | None
     decision_reason: str | None
     reviewed_at: datetime | None
@@ -420,6 +474,28 @@ class ReviewTaskRead(UtcResponseSchema):
     version: int
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def combine_decision_and_execution(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            data = dict(value)
+            decision = data["decision_status"]
+            execution = data.get("execution_status")
+        else:
+            decision = value.decision_status
+            execution = getattr(value, "execution_status", None)
+            data = {
+                field_name: getattr(value, field_name)
+                for field_name in cls.model_fields
+                if hasattr(value, field_name)
+            }
+        decision = ReviewDecisionStatus(decision)
+        execution = ExecutionStatus(execution) if execution is not None else None
+        data["decision_status"] = decision
+        data["execution_status"] = execution
+        data["display_status"] = _review_display_status(decision, execution)
+        return data
 
 
 class ReviewTaskPage(ApiSchema):
@@ -455,6 +531,7 @@ class WorkflowRunRead(UtcResponseSchema):
     thread_id: str
     user_id: int
     email_id: int
+    active_email_id: int | None = None
     status: WorkflowRunStatus
     current_node: str | None
     graph_version: str
@@ -531,6 +608,7 @@ class TaskRead(UtcResponseSchema):
     source_email_id: int | None
     task_type: TaskType
     interview_round: int | None
+    interview_round_id: int | None = None
     title: str
     description: str | None
     raw_time_text: str | None
@@ -704,6 +782,7 @@ class InterviewRoundRead(UtcResponseSchema):
     id: int
     application_id: int
     round_number: int
+    status: InterviewRoundStatus
     result: InterviewResult
     interview_date: datetime | None
     location: str | None
@@ -721,6 +800,7 @@ class InterviewRoundResultUpdate(ApiSchema):
     version: int = Field(gt=0)
     round_number: int = Field(ge=1, le=20)
     result: InterviewResult
+    close_application: bool = True
     reason: str = Field(min_length=1, max_length=1000)
 
     @field_validator("reason")

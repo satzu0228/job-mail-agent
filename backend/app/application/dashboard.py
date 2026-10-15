@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.domain.enums import (
     ApplicationStage,
     ApplicationStatus,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     TaskStatus,
     TaskType,
 )
@@ -90,7 +90,7 @@ class DashboardService:
                 select(ReviewTask)
                 .where(
                     ReviewTask.user_id == self._user_id,
-                    ReviewTask.status == ReviewTaskStatus.PENDING,
+                    ReviewTask.decision_status == ReviewDecisionStatus.PENDING,
                 )
                 .order_by(ReviewTask.created_at.desc())
                 .limit(10)

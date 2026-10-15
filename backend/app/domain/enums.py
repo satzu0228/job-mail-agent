@@ -139,16 +139,24 @@ class RiskLevel(StrEnum):
     HIGH = "HIGH"
 
 
-class ReviewTaskStatus(StrEnum):
+class ReviewDecisionStatus(StrEnum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
-    EXECUTING = "EXECUTING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    UNKNOWN = "UNKNOWN"
+
+
+class ReviewDisplayStatus(StrEnum):
+    PENDING = "PENDING"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+    APPROVED = "APPROVED"
+    APPROVED_EXECUTING = "APPROVED_EXECUTING"
+    APPROVED_SUCCEEDED = "APPROVED_SUCCEEDED"
+    APPROVED_FAILED = "APPROVED_FAILED"
+    APPROVED_UNKNOWN = "APPROVED_UNKNOWN"
 
 
 class DecisionSource(StrEnum):
@@ -183,6 +191,7 @@ class RequiredCapability(StrEnum):
 
 
 class InterviewRoundStatus(StrEnum):
+    PLANNED = "PLANNED"
     SCHEDULED = "SCHEDULED"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"

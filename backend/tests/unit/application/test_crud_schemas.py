@@ -9,18 +9,24 @@ from app.application.crud import BusinessCrudService
 from app.application.schemas import (
     JobApplicationInterviewResultUpdate,
     JobApplicationNextInterviewCreate,
+    JobApplicationRead,
     JobApplicationStageTransition,
     JobApplicationUpdate,
     TaskCreate,
     TaskRead,
 )
 from app.domain.enums import (
+    ApplicationSource,
     ApplicationStage,
     ApplicationStatus,
     InterviewResult,
+    InterviewRoundSource,
     TaskStatus,
     TaskType,
 )
+from app.infrastructure.db.models.application_event import ApplicationEvent
+from app.infrastructure.db.models.interview_round import InterviewRound
+from app.infrastructure.db.models.task import Task
 from app.infrastructure.db.repositories import VersionConflictError
 
 
@@ -87,28 +93,79 @@ def test_manual_stage_transition_rejects_blank_reason() -> None:
         )
 
 
+def test_application_read_exposes_server_allowed_actions() -> None:
+    now = datetime(2026, 10, 12, tzinfo=UTC)
+    active = JobApplicationRead(
+        id=1,
+        user_id=1,
+        company_name="示例公司",
+        company_alias=None,
+        position_name="后端工程师",
+        location=None,
+        current_stage=ApplicationStage.ASSESSMENT,
+        interview_result=None,
+        offer_result=None,
+        status=ApplicationStatus.ACTIVE,
+        source=ApplicationSource.MANUAL,
+        applied_at=now,
+        contact_name=None,
+        contact_email=None,
+        notes=None,
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert active.allowed_transitions == [
+        ApplicationStage.INTERVIEW,
+        ApplicationStage.OFFER,
+        ApplicationStage.REJECTED,
+        ApplicationStage.WITHDRAWN,
+    ]
+    assert active.allowed_actions == ["UPDATE_DETAILS", "TRANSITION_STAGE"]
+
+    closed = active.model_copy(
+        update={
+            "current_stage": ApplicationStage.REJECTED,
+            "status": ApplicationStatus.CLOSED,
+        }
+    )
+    assert closed.allowed_transitions == []
+    assert closed.allowed_actions == ["REOPEN_APPLICATION"]
+
+
 def test_manual_stage_transition_updates_status_and_writes_user_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.application.crud.settle_interview_tasks", lambda *args, **kwargs: 1
+        "app.application.application_commands.settle_interview_tasks",
+        lambda *args, **kwargs: 1,
+    )
+    interview_round = SimpleNamespace(
+        round_number=1,
+        result=InterviewResult.PENDING,
+        source=InterviewRoundSource.MANUAL,
+        source_email_id=None,
     )
     application = SimpleNamespace(
         id=8,
         version=3,
         current_stage=ApplicationStage.INTERVIEW,
+        interview_result=InterviewResult.PENDING,
+        offer_result=None,
         status=ApplicationStatus.ACTIVE,
     )
 
     class FakeSession:
         def __init__(self) -> None:
             self.added: list[object] = []
+            self.scalar_values = iter([None, interview_round, interview_round])
 
         def begin(self):
             return nullcontext()
 
         def scalar(self, statement):
-            return 1
+            return next(self.scalar_values)
 
         def add(self, value: object) -> None:
             self.added.append(value)
@@ -119,6 +176,7 @@ def test_manual_stage_transition_updates_status_and_writes_user_audit_event(
     session = FakeSession()
     service = BusinessCrudService.__new__(BusinessCrudService)
     service._session = session  # type: ignore[assignment]
+    service._user_id = 1
     service.applications = SimpleNamespace(
         get=lambda application_id, for_update: application
     )
@@ -134,7 +192,7 @@ def test_manual_stage_transition_updates_status_and_writes_user_audit_event(
 
     assert updated.current_stage is ApplicationStage.REJECTED
     assert updated.status is ApplicationStatus.CLOSED
-    event = session.added[0]
+    event = next(value for value in session.added if isinstance(value, ApplicationEvent))
     assert event.event_type == "MANUAL_STAGE_CHANGED"
     assert event.previous_stage is ApplicationStage.INTERVIEW
     assert event.confirmed_stage is ApplicationStage.REJECTED
@@ -148,13 +206,15 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.application.crud.settle_interview_tasks", lambda *args, **kwargs: 1
+        "app.application.application_commands.settle_interview_tasks",
+        lambda *args, **kwargs: 1,
     )
     application = SimpleNamespace(
         id=9,
         version=2,
         current_stage=ApplicationStage.INTERVIEW,
         interview_result=InterviewResult.PENDING,
+        offer_result=None,
         status=ApplicationStatus.ACTIVE,
     )
 
@@ -166,7 +226,7 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
             return nullcontext()
 
         def scalar(self, statement):
-            return 1
+            return None
 
         def add(self, value: object) -> None:
             self.added.append(value)
@@ -177,6 +237,7 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
     session = FakeSession()
     service = BusinessCrudService.__new__(BusinessCrudService)
     service._session = session  # type: ignore[assignment]
+    service._user_id = 1
     service.applications = SimpleNamespace(
         get=lambda application_id, for_update: application
     )
@@ -190,10 +251,10 @@ def test_manual_interview_result_closes_failed_application_and_writes_event(
         ),
     )
 
-    assert updated.current_stage is ApplicationStage.INTERVIEW
+    assert updated.current_stage is ApplicationStage.REJECTED
     assert updated.interview_result is InterviewResult.FAILED
     assert updated.status is ApplicationStatus.CLOSED
-    event = session.added[0]
+    event = next(value for value in session.added if isinstance(value, ApplicationEvent))
     assert event.event_type == "INTERVIEW_RESULT_CHANGED"
     assert event.details["previous_result"] == "PENDING"
     assert event.details["interview_result"] == "FAILED"
@@ -205,18 +266,20 @@ def test_schedule_next_interview_increments_any_round_and_resets_result() -> Non
         version=3,
         current_stage=ApplicationStage.INTERVIEW,
         interview_result=InterviewResult.PASSED,
+        offer_result=None,
         status=ApplicationStatus.ACTIVE,
     )
 
     class FakeSession:
         def __init__(self) -> None:
             self.added: list[object] = []
+            self.scalar_values = iter([2, None])
 
         def begin(self):
             return nullcontext()
 
         def scalar(self, statement):
-            return 2
+            return next(self.scalar_values)
 
         def add(self, value: object) -> None:
             self.added.append(value)
@@ -257,7 +320,9 @@ def test_schedule_next_interview_increments_any_round_and_resets_result() -> Non
     assert updated.interview_result is InterviewResult.PENDING
     assert task.interview_round == 3
     assert task.status is TaskStatus.CONFIRMED
-    event = session.added[0]
+    assert any(isinstance(value, InterviewRound) for value in session.added)
+    assert any(isinstance(value, Task) for value in session.added)
+    event = next(value for value in session.added if isinstance(value, ApplicationEvent))
     assert event.event_type == "NEXT_INTERVIEW_SCHEDULED"
     assert event.details["interview_round"] == 3
     assert event.details["interview_result"] == "PENDING"

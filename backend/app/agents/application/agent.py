@@ -11,7 +11,7 @@ from app.agents.application.schemas import (
     ApplicationAgentOutput,
 )
 from app.agents.application.tools import create_application_tools
-from app.agents.common.runner import make_agent_runner, load_prompt
+from app.agents.common.runner import load_prompt, make_agent_runner
 
 
 class ApplicationAgent:
@@ -28,7 +28,7 @@ class ApplicationAgent:
         cls,
         model: BaseChatModel,
         session_factory: Callable[[], Session],
-    ) -> "ApplicationAgent":
+    ) -> ApplicationAgent:
         tools = create_application_tools(session_factory)
         system_prompt = load_prompt("application", "v2")
         return cls(

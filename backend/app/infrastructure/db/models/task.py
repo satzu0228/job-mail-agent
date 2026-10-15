@@ -2,10 +2,11 @@ from datetime import datetime
 
 from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects import mysql
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import TaskStatus, TaskType
 from app.infrastructure.db.base import MYSQL_TABLE_OPTIONS, Base, TimestampMixin, varchar_enum
+from app.infrastructure.db.models.interview_round import InterviewRound
 
 
 class Task(TimestampMixin, Base):
@@ -29,6 +30,7 @@ class Task(TimestampMixin, Base):
         mysql.BIGINT(unsigned=True),
         ForeignKey("job_applications.id", ondelete="RESTRICT"),
         nullable=True,
+        index=True,
     )
     source_email_id: Mapped[int | None] = mapped_column(
         mysql.BIGINT(unsigned=True),
@@ -43,9 +45,11 @@ class Task(TimestampMixin, Base):
     task_type: Mapped[TaskType] = mapped_column(
         varchar_enum(TaskType, name="task_type", length=32), nullable=False
     )
-    interview_round: Mapped[int | None] = mapped_column(
-        mysql.SMALLINT(unsigned=True),
+    interview_round_id: Mapped[int | None] = mapped_column(
+        mysql.BIGINT(unsigned=True),
+        ForeignKey("interview_rounds.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -69,5 +73,14 @@ class Task(TimestampMixin, Base):
         default=1,
         server_default=text("1"),
     )
+
+    round_record: Mapped[InterviewRound | None] = relationship(
+        foreign_keys=[interview_round_id],
+    )
+
+    @property
+    def interview_round(self) -> int | None:
+        """从权威面试轮次派生 API 展示字段。"""
+        return self.round_record.round_number if self.round_record is not None else None
 
     __mapper_args__ = {"version_id_col": version}

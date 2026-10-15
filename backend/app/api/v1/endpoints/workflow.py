@@ -144,7 +144,11 @@ class ReviewDecisionCoordinator:
             self._settings.demo_user_id,
         ).get(task_id)
         action_type = task.action_type
-        workflow = self._session.get(WorkflowRun, task.workflow_run_id)
+        workflow = (
+            self._session.get(WorkflowRun, task.workflow_run_id)
+            if task.workflow_run_id is not None
+            else None
+        )
         is_phase_seven = (
             workflow is not None and workflow.graph_version == GRAPH_VERSION
         )

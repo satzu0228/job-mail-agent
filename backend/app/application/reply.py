@@ -17,6 +17,10 @@ from app.agents.reply.schemas import (
     ReplyUserContext,
 )
 from app.application.email_analysis import prepare_email
+from app.application.review_decisions import (
+    review_decision_status,
+    set_review_decision,
+)
 from app.application.schemas import (
     ReplyDraftRead,
     ReplyGenerationRequest,
@@ -32,7 +36,7 @@ from app.domain.enums import (
     ExecutorType,
     ReplyDraftStatus,
     ReviewActionType,
-    ReviewTaskStatus,
+    ReviewDecisionStatus,
     RiskLevel,
 )
 from app.infrastructure.db.models.action_execution import ActionExecution
@@ -209,7 +213,6 @@ class ReplyGenerationService:
                 "subject": draft.subject,
                 "body": draft.generated_body,
             },
-            status=ReviewTaskStatus.PENDING,
             idempotency_key=f"reply-review:{email.id}:{draft.version}",
             resource_version=draft.version,
         )
@@ -305,11 +308,11 @@ class ReplyGenerationService:
             tasks = self._session.scalars(
                 select(ReviewTask).where(
                     ReviewTask.draft_id == draft.id,
-                    ReviewTask.status == ReviewTaskStatus.PENDING,
+                    ReviewTask.decision_status == ReviewDecisionStatus.PENDING,
                 )
             )
             for task in tasks:
-                task.status = ReviewTaskStatus.EXPIRED
+                set_review_decision(task, ReviewDecisionStatus.EXPIRED)
 
     def _next_version(self, email_id: int) -> int:
         latest = self._session.scalar(
@@ -362,7 +365,6 @@ class ReplySendService:
             status=ExecutionStatus.RUNNING,
             started_at=_utc_now(),
         )
-        task.status = ReviewTaskStatus.EXECUTING
         self._session.add(execution)
         self._session.commit()
 
@@ -384,7 +386,6 @@ class ReplySendService:
             execution.status = ExecutionStatus.UNKNOWN
             execution.error_code = "SMTP_DELIVERY_UNKNOWN"
             execution.error_message = str(exc)[:500]
-            task.status = ReviewTaskStatus.UNKNOWN
         except Exception as exc:
             execution.status = ExecutionStatus.FAILED
             execution.error_code = (
@@ -393,7 +394,6 @@ class ReplySendService:
                 else exc.__class__.__name__.upper()
             )
             execution.error_message = (str(exc).strip() or "SMTP 发送失败")[:500]
-            task.status = ReviewTaskStatus.FAILED
         else:
             execution.status = ExecutionStatus.SUCCEEDED
             execution.external_reference = external_reference
@@ -438,7 +438,6 @@ class ReplySendService:
                         archive_status=ArchiveStatus.NONE,
                     )
                 )
-            task.status = ReviewTaskStatus.SUCCEEDED
         execution.finished_at = _utc_now()
         self._session.commit()
         return self._response(draft, task, execution)
@@ -482,13 +481,10 @@ class ReplySendService:
                 ReviewTask.action_type == ReviewActionType.SEND_REPLY,
             )
         )
-        if task is None or task.status not in {
-            ReviewTaskStatus.APPROVED,
-            ReviewTaskStatus.FAILED,
-            ReviewTaskStatus.EXECUTING,
-            ReviewTaskStatus.SUCCEEDED,
-            ReviewTaskStatus.UNKNOWN,
-        }:
+        if (
+            task is None
+            or review_decision_status(task) is not ReviewDecisionStatus.APPROVED
+        ):
             raise ResourceConflictError("回复发送审核尚未批准")
         if task.resource_version != draft.version:
             raise VersionConflictError("审核任务引用的草稿版本已变化")
