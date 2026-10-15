@@ -36,6 +36,18 @@
 阶段仍需真实 SMTP 本轮回归、60 分钟自动同步稳定性和剩余故障注入，详见
 `docs/phase-11/system-test-progress.md`。
 
+状态与状态流转专项重构已完成 R0、R1、R2、R3、R4、R5，R6 代码与迁移工作已收口：已建立统一 `ApplicationStatePolicy` 与
+`ApplicationCommandHandler`，审核决定和动作执行已分轴；`InterviewRound` 已成为面试
+轮次、安排状态和结果的权威事实，Task 通过 `interview_round_id` 外键关联轮次，申请级
+结果只投影最新轮次；普通动作不再创建伪工作流，手动/自动同步已统一经过
+`SyncAndProcessMailbox`。前端已建立五个 Pinia Store、服务端能力驱动的受控操作、统一
+轻量轮询和精确失效，删除全局 DOM 业务刷新事件与前端状态矩阵。M1、M2、M3、M4 均已在
+真实 MySQL 完成；M4 删除申请级面试结果、Task 轮次数字和旧审核状态三个兼容列，API 改为
+从权威轮次派生。当前 262 个后端测试、25 个前端测试和 18 个 Playwright Chromium 场景
+通过，后端覆盖率 71.06%，状态审计五类异常均为 0，Alembic Head 为 `20261014_0014`。
+R6 仅剩需用户明确批准的新 `SEND_REPLY` 真实 SMTP 外部验收，详见
+`docs/plans/state-and-transition-refactor-progress.md`。
+
 项目第一至第八阶段均已完成。第四阶段已通过真实 163 邮箱验收：IMAP/SMTP 登录成功，首次只读同步新增 8 封邮件，第二次增量同步无新邮件，MySQL 中 8 个 IMAP 身份均唯一且无重复 Message-ID；8 封邮件全部解析成功，7 封 HTML 邮件未检出脚本、事件属性、远程图片或危险协议。第五阶段已完成 Classification/Extraction Pydantic Schema、正式 Agent、版本化 Prompt、DeepSeek 适配、`classify`/`extract`/`analyze` API、非求职短路、邮件详情当前分析展示及 `email_analyses` 版本化持久化；脱敏面试 Fixture 经正式 API、真实 DeepSeek 和 MySQL 联调返回 `INTERVIEW`。第六阶段已完成确定性候选申请评分、Application Agent、`match-application` API、申请状态机、审核任务与幂等申请执行边界；关联/新建和阶段变化分两次审核，同阶段通知只写时间线事件。第七阶段已完成强类型 LangGraph State、确定性路由与 Validation Node、三 Agent 顺序编排、非求职短路、一次受限重试、两段 `interrupt`/`resume`、AES 加密 SQLite checkpoint、工作流启动/查询 API 及审核自动恢复；关闭并重建图后恢复测试通过，Stub Agent 下真实 MySQL 两段审核闭环最终为 `SUCCEEDED`。第八阶段已完成 Reply Agent、版本化 Prompt、确定性主题/地址/称呼/签名/MIME Formatter、最新草稿版本保护、`SEND_REPLY` 高风险审核、三段工作流中断恢复和图外 SMTP 幂等 Executor；真实 DeepSeek + 163 IMAP/SMTP + MySQL 闭环最终为 `SUCCEEDED`，相同幂等键重复提交返回同一执行记录，回复经 IMAP 确认实际到达。联调发现并修复审核任务回滚后读取过期 ORM 属性导致的事务重入缺陷。第九阶段已创建 Vue 3 + TypeScript + Element Plus 前端，完成邮件两栏页、飞书表格式求职进度、审核中心、日程/月历和邮箱设置页面并接通现有 FastAPI API；已增加 163、126、QQ、Gmail 应用专用密码和自定义 IMAP/SMTP Provider 预设、单账户事务性启用约束、服务端分页筛选、申请事件时间线与只读 IMAP 受控附件下载。当前 97 个后端测试、9 个前端测试、前端类型检查和生产构建通过；真实 FastAPI/MySQL 数据浏览器验收无页面级横向溢出。下一步继续补齐 Playwright 前端端到端测试。
 
 用户已批准第九阶段增加多邮箱 Provider 预设：首批支持 163、126、QQ、Gmail
