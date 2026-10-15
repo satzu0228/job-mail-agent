@@ -174,6 +174,13 @@ const applications = [
     version: 1,
     created_at: now,
     updated_at: now,
+    allowed_transitions: ['OFFER', 'REJECTED', 'WITHDRAWN'],
+    allowed_actions: [
+      'UPDATE_DETAILS',
+      'TRANSITION_STAGE',
+      'RECORD_INTERVIEW_RESULT',
+      'SCHEDULE_NEXT_INTERVIEW',
+    ],
   },
   {
     id: 2,
@@ -193,6 +200,8 @@ const applications = [
     version: 1,
     created_at: now,
     updated_at: now,
+    allowed_transitions: ['ASSESSMENT', 'INTERVIEW', 'OFFER', 'REJECTED', 'WITHDRAWN'],
+    allowed_actions: ['UPDATE_DETAILS', 'TRANSITION_STAGE'],
   },
 ]
 
@@ -204,6 +213,7 @@ const tasks = [
     source_email_id: 1,
     task_type: 'INTERVIEW',
     interview_round: 1,
+    interview_round_id: 1,
     title: '星河科技一面',
     description: '后端开发工程师技术面试',
     raw_time_text: '8 月 5 日（周三）14:00',
@@ -224,6 +234,7 @@ const tasks = [
     source_email_id: 2,
     task_type: 'INTERVIEW',
     interview_round: null,
+    interview_round_id: null,
     title: '待确认沟通时间',
     description: '时间和岗位存在歧义，需人工确认。',
     raw_time_text: '下周找时间',
@@ -274,7 +285,10 @@ const reviewTasks = [
       source_timezone: 'Asia/Shanghai',
     },
     reviewed_payload: null,
-    status: 'PENDING',
+    decision_status: 'PENDING',
+    execution_status: null,
+    display_status: 'PENDING',
+    parent_review_task_id: null,
     decision_source: null,
     decision_reason: null,
     reviewed_at: null,
@@ -298,7 +312,10 @@ const reviewTasks = [
       reviewed_body: '感谢邀请，我会准时参加。',
     },
     reviewed_payload: null,
-    status: 'PENDING',
+    decision_status: 'PENDING',
+    execution_status: null,
+    display_status: 'PENDING',
+    parent_review_task_id: 'review-create-task',
     decision_source: null,
     decision_reason: null,
     reviewed_at: null,
@@ -412,6 +429,8 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
         skipped: state.syncCount === 1 ? 0 : 1,
         failed: 0,
         created_email_ids: state.syncCount === 1 ? [1] : [],
+        workflow_run_ids: state.syncCount === 1 ? ['workflow-sync-1'] : [],
+        failed_workflows: {},
       })
     }
     if (method === 'GET' && path === '/emails') return json(route, state.emails)
@@ -444,7 +463,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
           target_folder: restoring ? 'INBOX' : 'JobMailArchive',
         },
         reviewed_payload: null,
-        status: 'PENDING',
+        decision_status: 'PENDING',
+        execution_status: null,
+        display_status: 'PENDING',
+        parent_review_task_id: null,
         decision_source: null,
         decision_reason: null,
         reviewed_at: null,
@@ -525,6 +547,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
             : 'WITHDRAWN'
           : 'ACTIVE'
         item.version += 1
+        item.allowed_transitions = item.status === 'ACTIVE' ? ['WITHDRAWN'] : []
+        item.allowed_actions = item.status === 'ACTIVE'
+          ? ['UPDATE_DETAILS', 'TRANSITION_STAGE']
+          : ['REOPEN_APPLICATION']
       }
       return json(route, item)
     }
@@ -571,6 +597,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
         application_id: item?.id ?? null,
         source_email_id: null,
         interview_round: currentRound + 1,
+        interview_round_id: currentRound + 1,
         status: 'CONFIRMED',
         version: 1,
         created_at: now,
@@ -614,6 +641,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
         offset: 0,
         limit: 100,
       })
+    }
+    if (method === 'GET' && /\/job-applications\/\d+\/interview-rounds$/.test(path)) {
+      return json(route, [])
     }
     if (method === 'GET' && path === '/tasks') return json(route, state.tasks)
     if (method === 'GET' && path === '/tasks/query') {
@@ -671,7 +701,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}) {
       const payload = request.postDataJSON()
       state.lastDecisionPayload = structuredClone(payload)
       if (item) {
-        item.status = payload.approve ? 'SUCCEEDED' : 'REJECTED'
+        item.decision_status = payload.approve ? 'APPROVED' : 'REJECTED'
+        item.execution_status = payload.approve ? 'SUCCEEDED' : null
+        item.display_status = payload.approve ? 'APPROVED_SUCCEEDED' : 'REJECTED'
         item.reviewed_payload = payload.reviewed_payload
         item.decision_reason = payload.reason
         item.reviewed_at = now

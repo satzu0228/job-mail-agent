@@ -36,20 +36,6 @@ import type {
   WorkflowRun,
 } from '@/types/api'
 
-async function collectAll<T>(
-  fetchPage: (offset: number, limit: number) => Promise<Page<T>>,
-  limit = 100,
-): Promise<T[]> {
-  const items: T[] = []
-  let offset = 0
-  for (;;) {
-    const page = await fetchPage(offset, limit)
-    items.push(...page.items)
-    offset += page.items.length
-    if (page.items.length === 0 || offset >= page.total) return items
-  }
-}
-
 export const emailAccountApi = {
   list: () => http.get<EmailAccount[]>('/email-accounts').then(({ data }) => data),
   create: (payload: EmailAccountCreate) =>
@@ -82,12 +68,6 @@ export const emailAccountApi = {
 }
 
 export const emailApi = {
-  list: (limit = 100) =>
-    collectAll<EmailListItem>((offset, pageLimit) =>
-      http
-        .get<Page<EmailListItem>>('/emails/query', { params: { offset, limit: pageLimit } })
-        .then(({ data }) => data),
-    limit),
   query: (params: {
     offset?: number
     limit?: number
@@ -96,6 +76,8 @@ export const emailApi = {
     application_id?: number
     linked?: boolean
     category?: string
+    direction?: string
+    archive_status?: string
   }) => http.get<Page<EmailListItem>>('/emails/query', { params }).then(({ data }) => data),
   detail: (id: number) => http.get<EmailDetail>(`/emails/${id}`).then(({ data }) => data),
   downloadAttachment: (emailId: number, attachmentIndex: number) =>
@@ -113,12 +95,6 @@ export const emailApi = {
 }
 
 export const applicationApi = {
-  list: (limit = 100) =>
-    collectAll<JobApplication>((offset, pageLimit) =>
-      http
-        .get<Page<JobApplication>>('/job-applications/query', { params: { offset, limit: pageLimit } })
-        .then(({ data }) => data),
-    limit),
   create: (payload: JobApplicationCreate) =>
     http.post<JobApplication>('/job-applications', payload).then(({ data }) => data),
   query: (params: {
@@ -131,6 +107,8 @@ export const applicationApi = {
     http
       .get<Page<JobApplication>>('/job-applications/query', { params })
       .then(({ data }) => data),
+  detail: (id: number) =>
+    http.get<JobApplication>(`/job-applications/${id}`).then(({ data }) => data),
   update: (id: number, payload: Partial<JobApplication> & { version: number }) =>
     http.patch<JobApplication>(`/job-applications/${id}`, payload).then(({ data }) => data),
   transitionStage: (id: number, payload: JobApplicationStageTransition) =>
@@ -176,12 +154,6 @@ export const applicationApi = {
 }
 
 export const taskApi = {
-  list: (limit = 100) =>
-    collectAll<Task>((offset, pageLimit) =>
-      http
-        .get<Page<Task>>('/tasks/query', { params: { offset, limit: pageLimit } })
-        .then(({ data }) => data),
-    limit),
   query: (params: {
     offset?: number
     limit?: number
@@ -213,12 +185,6 @@ export const reminderApi = {
 }
 
 export const reviewApi = {
-  list: (limit = 100) =>
-    collectAll<ReviewTask>((offset, pageLimit) =>
-      http
-        .get<Page<ReviewTask>>('/review-tasks/query', { params: { offset, limit: pageLimit } })
-        .then(({ data }) => data),
-    limit),
   query: (params: {
     offset?: number
     limit?: number

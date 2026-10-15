@@ -3,9 +3,12 @@ import { Calendar as CalendarIcon, List, Link, Plus } from '@element-plus/icons-
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 
-import { applicationApi, reminderApi, taskApi } from '@/api'
+import { reminderApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
+import { useApplicationStore } from '@/stores/applications'
+import { useTaskStore } from '@/stores/tasks'
 import { taskStatusMeta, taskTypeMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatRelativeDate, taskTime } from '@/utils/format'
 import type { JobApplication, Reminder, Task, TaskCreate, TaskStatus, TaskType } from '@/types/api'
@@ -13,10 +16,10 @@ import type { JobApplication, Reminder, Task, TaskCreate, TaskStatus, TaskType }
 type ViewMode = 'list' | 'month'
 type InterviewAction = 'reschedule' | 'withdraw'
 
-const tasks = ref<Task[]>([])
-const reminders = ref<Reminder[]>([])
-const applications = ref<JobApplication[]>([])
-const loading = ref(false)
+const applicationStore = useApplicationStore()
+const taskStore = useTaskStore()
+const { applications } = storeToRefs(applicationStore)
+const { tasks, reminders, loading } = storeToRefs(taskStore)
 const viewMode = ref<ViewMode>('list')
 const calendarDate = ref(new Date())
 const selected = ref<Task | null>(null)
@@ -102,20 +105,13 @@ function openTask(task: Task) {
 }
 
 async function loadData() {
-  loading.value = true
   try {
-    const [taskRows, applicationRows, reminderRows] = await Promise.all([
-      taskApi.list(),
-      applicationApi.list(),
-      reminderApi.list(true),
+    await Promise.all([
+      taskStore.refreshRange({ offset: 0, limit: 100 }),
+      applicationStore.loadPage({ offset: 0, limit: 50 }),
     ])
-    tasks.value = taskRows
-    applications.value = applicationRows
-    reminders.value = reminderRows
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    loading.value = false
   }
 }
 
@@ -164,7 +160,7 @@ async function createTask() {
       status: 'CONFIRMED',
     }
     const created = await taskApi.create(payload)
-    tasks.value = [created, ...tasks.value]
+    taskStore.upsert(created)
     createVisible.value = false
     ElMessage.success('日程已创建')
   } catch (error) {
@@ -177,7 +173,7 @@ async function createTask() {
 async function dismissReminder(reminder: Reminder) {
   try {
     await reminderApi.setRead(reminder.id)
-    reminders.value = reminders.value.filter((item) => item.id !== reminder.id)
+    delete taskStore.remindersById[reminder.id]
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   }
@@ -187,12 +183,10 @@ async function updateStatus(status: TaskStatus) {
   if (!selected.value) return
   updating.value = true
   try {
-    const updated = await taskApi.update(selected.value.id, {
+    const updated = await taskStore.updateTask(selected.value.id, {
       version: selected.value.version,
       status,
     })
-    const index = tasks.value.findIndex((task) => task.id === updated.id)
-    if (index >= 0) tasks.value[index] = updated
     selected.value = updated
     ElMessage.success('日程状态已更新')
   } catch (error) {
@@ -222,7 +216,7 @@ async function confirmInterviewAction() {
         ElMessage.warning('请选择新的面试时间')
         return
       }
-      const updated = await taskApi.update(selected.value.id, {
+      const updated = await taskStore.updateTask(selected.value.id, {
         version: selected.value.version,
         start_at: new Date(rescheduleAt.value).toISOString(),
         source_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',

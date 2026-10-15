@@ -17,3 +17,7 @@ export function getApiErrorMessage(error: unknown): string {
   }
   return error instanceof Error ? error.message : '操作失败，请稍后重试'
 }
+
+export function isVersionConflict(error: unknown): boolean {
+  return error instanceof AxiosError && error.response?.status === 409
+}

@@ -15,9 +15,10 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 
-import { emailAccountApi, emailApi } from '@/api'
+import { emailApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
 import {
   analysisFieldLabel,
@@ -33,19 +34,22 @@ import {
 } from '@/utils/emailHtml'
 import { formatDateTime, recipientText } from '@/utils/format'
 import type { EmailAccount, EmailDetail, EmailListItem, WorkflowRun } from '@/types/api'
+import { useMailStore } from '@/stores/mail'
+import { usePollingStore } from '@/stores/polling'
 
 const route = useRoute()
 const router = useRouter()
 
-const emails = ref<EmailListItem[]>([])
-const accounts = ref<EmailAccount[]>([])
+const mailStore = useMailStore()
+const pollingStore = usePollingStore()
+const { emails, accounts, loading: loadingList } = storeToRefs(mailStore)
+let unsubscribePolling: (() => void) | undefined
 const selectedAccountId = ref<number | null>(null)
 const selectedEmail = ref<EmailDetail | null>(null)
 const directionFilter = ref<'RECEIVED' | 'SENT'>('RECEIVED')
 const linkFilter = ref<'all' | 'linked' | 'unlinked'>('all')
 const activeDetailTab = ref('content')
 const keyword = ref('')
-const loadingList = ref(false)
 const loadingDetail = ref(false)
 const syncing = ref(false)
 const batchProcessing = ref(false)
@@ -135,18 +139,15 @@ const emailHtmlDocument = computed(() => {
 })
 
 async function loadBaseData() {
-  loadingList.value = true
   try {
     const [emailRows, accountRows] = await Promise.all([
-      emailApi.list(),
-      emailAccountApi.list(),
+      mailStore.loadPage({ offset: 0, limit: 50 }),
+      mailStore.loadAccounts(),
     ])
-    emails.value = emailRows
-    accounts.value = accountRows
     selectedAccountId.value ??= accountRows.find((account) => account.is_active)?.id ?? null
 
     const routeId = selectedId.value
-    const routeEmail = emailRows.find((email) => email.id === routeId)
+    const routeEmail = emailRows.items.find((email) => email.id === routeId)
     if (routeEmail) directionFilter.value = routeEmail.direction
     const firstId =
       routeEmail
@@ -155,15 +156,19 @@ async function loadBaseData() {
     if (firstId) await selectEmail(firstId, false)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    loadingList.value = false
   }
 }
 
 async function refreshEmailList() {
   if (loadingList.value || syncing.value) return
   try {
-    emails.value = await emailApi.list()
+    await mailStore.loadPage({
+      offset: 0,
+      limit: 50,
+      account_id: selectedAccountId.value ?? undefined,
+      keyword: keyword.value.trim() || undefined,
+      direction: directionFilter.value,
+    })
     const routeEmail = emails.value.find((email) => email.id === selectedId.value)
     if (routeEmail) {
       directionFilter.value = routeEmail.direction
@@ -175,10 +180,6 @@ async function refreshEmailList() {
   } catch {
     // 轮询失败保持当前列表，手动同步仍会展示明确错误。
   }
-}
-
-function handleDataPoll() {
-  void refreshEmailList()
 }
 
 function selectFirstFilteredEmail() {
@@ -205,7 +206,7 @@ async function selectEmail(id: number, updateRoute = true) {
   externalImageCount.value = 0
   clearInlineImageUrls()
   try {
-    selectedEmail.value = await emailApi.detail(id)
+    selectedEmail.value = await mailStore.refreshEmail(id)
     activeDetailTab.value = 'content'
     if (updateRoute && selectedId.value !== id) {
       await router.replace({ name: 'mail', params: { emailId: id } })
@@ -223,8 +224,10 @@ async function syncAccount() {
     return
   }
   syncing.value = true
+  batchProcessing.value = true
+  batchProgress.value = '正在同步并智能处理新邮件...'
   try {
-    const result = await emailAccountApi.sync(selectedAccountId.value)
+    const result = await mailStore.syncAndProcess(selectedAccountId.value)
     const newIds: number[] = result.created_email_ids ?? []
     const newCount = result.created
 
@@ -234,35 +237,16 @@ async function syncAccount() {
       return
     }
 
-    ElMessage.success(`同步完成，新增 ${newCount} 封邮件，正在自动智能处理...`)
     await loadBaseData()
-
-    // 按邮件先后顺序串行启动工作流（顺序影响推迟关联逻辑）
-    batchProcessing.value = true
-    let successCount = 0
-    let reviewTaskCount = 0
-    for (let i = 0; i < newIds.length; i++) {
-      batchProgress.value = `正在智能处理 (${i + 1}/${newIds.length})...`
-      try {
-        const run = await emailApi.startWorkflow(newIds[i]!)
-        successCount++
-        if (run.pending_review_task_id) reviewTaskCount++
-      } catch (error) {
-        console.error(`Email ${newIds[i]} workflow failed:`, error)
-        // 单封失败不阻塞后续
-      }
-    }
-    batchProcessing.value = false
-    batchProgress.value = ''
-
-    await loadBaseData()
-    if (reviewTaskCount > 0) {
+    const successCount = result.workflow_run_ids.length
+    const failureCount = Object.keys(result.failed_workflows).length
+    if (failureCount > 0) {
       ElMessage.success(
-        `${successCount}/${newIds.length} 封邮件处理完毕，生成 ${reviewTaskCount} 项审核，请前往审核中心审批`,
+        `新增 ${newCount} 封邮件，${successCount} 封已启动处理，${failureCount} 封处理失败`,
       )
     } else {
       ElMessage.success(
-        `${successCount}/${newIds.length} 封邮件处理完毕，未发现需要审核的求职邮件`,
+        `同步和智能处理完成，共处理 ${successCount}/${newIds.length} 封新邮件`,
       )
     }
   } catch (error) {
@@ -279,19 +263,19 @@ async function startWorkflow() {
   processing.value = true
   try {
     workflow.value = await emailApi.startWorkflow(selectedEmail.value.id)
-    selectedEmail.value = await emailApi.detail(selectedEmail.value.id)
+    selectedEmail.value = await mailStore.refreshEmail(selectedEmail.value.id)
     // 同步更新左侧列表中对应邮件的状态
     const idx = emails.value.findIndex((e) => e.id === selectedEmail.value!.id)
     if (idx !== -1) {
-      emails.value[idx] = {
-        ...emails.value[idx],
+      mailStore.emailsById[selectedEmail.value.id] = {
+        ...emails.value[idx]!,
         application_id: selectedEmail.value.application_id,
         has_analysis: selectedEmail.value.current_analysis !== null,
       }
     }
     if (workflow.value.pending_review_task_id) {
       ElMessage.success('智能处理已暂停，等待你的审核')
-      window.dispatchEvent(new Event('job-mail:refresh-badge'))
+      await pollingStore.refreshNow()
     } else if (workflow.value.status === 'SUCCEEDED') {
       ElMessage.success('智能处理已完成')
     }
@@ -405,11 +389,11 @@ watch(
 )
 
 onMounted(() => {
-  window.addEventListener('job-mail:data-poll', handleDataPoll)
+  unsubscribePolling = pollingStore.subscribe('mail-page', refreshEmailList)
   void loadBaseData()
 })
 onUnmounted(() => {
-  window.removeEventListener('job-mail:data-poll', handleDataPoll)
+  unsubscribePolling?.()
   clearInlineImageUrls()
 })
 </script>

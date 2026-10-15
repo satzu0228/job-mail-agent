@@ -3,7 +3,7 @@ import type {
   EmailCategory,
   EmailPriority,
   ReviewActionType,
-  ReviewTaskStatus,
+  ReviewDisplayStatus,
   RiskLevel,
   TaskStatus,
   TaskType,
@@ -51,16 +51,16 @@ export const reviewActionMeta: Record<ReviewActionType, string> = {
   RESTORE_EMAIL: '恢复邮件',
 }
 
-export const reviewStatusMeta: Record<ReviewTaskStatus, { label: string; type: TagKind }> = {
+export const reviewDisplayStatusMeta: Record<ReviewDisplayStatus, { label: string; type: TagKind }> = {
   PENDING: { label: '待审核', type: 'warning' },
   APPROVED: { label: '已批准', type: 'primary' },
   REJECTED: { label: '已拒绝', type: 'danger' },
   CANCELLED: { label: '已取消', type: 'info' },
   EXPIRED: { label: '已过期', type: 'info' },
-  EXECUTING: { label: '执行中', type: 'warning' },
-  SUCCEEDED: { label: '已完成', type: 'success' },
-  FAILED: { label: '执行失败', type: 'danger' },
-  UNKNOWN: { label: '状态未知', type: 'info' },
+  APPROVED_EXECUTING: { label: '已批准 · 执行中', type: 'warning' },
+  APPROVED_SUCCEEDED: { label: '已批准 · 执行成功', type: 'success' },
+  APPROVED_FAILED: { label: '已批准 · 执行失败', type: 'danger' },
+  APPROVED_UNKNOWN: { label: '已批准 · 待核对', type: 'info' },
 }
 
 export const riskMeta: Record<RiskLevel, { label: string; type: TagKind }> = {

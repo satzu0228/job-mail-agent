@@ -2,14 +2,18 @@
 import { Refresh, Search, Warning } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 
-import { emailApi, reviewApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
+import ReviewDecisionActions from '@/components/reviews/ReviewDecisionActions.vue'
+import { useMailStore } from '@/stores/mail'
+import { usePollingStore } from '@/stores/polling'
+import { useReviewStore } from '@/stores/reviews'
 import {
   enumValueLabel,
   reviewActionMeta,
-  reviewStatusMeta,
+  reviewDisplayStatusMeta,
   riskMeta,
 } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
@@ -21,16 +25,17 @@ type ReviewFilter = 'pending' | 'processed'
 const route = useRoute()
 const router = useRouter()
 
-const tasks = ref<ReviewTask[]>([])
+const reviewStore = useReviewStore()
+const mailStore = useMailStore()
+const pollingStore = usePollingStore()
+const { reviews: tasks, loading } = storeToRefs(reviewStore)
+const { emails } = storeToRefs(mailStore)
 const batchApproving = ref(false)
-const emails = ref<EmailListItem[]>([])
 const filter = ref<ReviewFilter>('pending')
 const keyword = ref('')
-const loading = ref(false)
 const deciding = ref(false)
 const drawerVisible = ref(false)
 const selected = ref<ReviewTask | null>(null)
-const payloadText = ref('')
 const replyBody = ref('')
 const selectedApplicationId = ref<number | null>(null)
 const decisionReason = ref('')
@@ -38,8 +43,8 @@ const decisionReason = ref('')
 const filteredTasks = computed(() => {
   const normalized = keyword.value.trim().toLowerCase()
   return tasks.value.filter((task) => {
-    if (filter.value === 'pending' && task.status !== 'PENDING') return false
-    if (filter.value === 'processed' && task.status === 'PENDING') return false
+    if (filter.value === 'pending' && task.decision_status !== 'PENDING') return false
+    if (filter.value === 'processed' && task.decision_status === 'PENDING') return false
     if (!normalized) return true
     return [
       reviewActionMeta[task.action_type],
@@ -68,35 +73,32 @@ function riskType(task: ReviewTask) {
 }
 
 function statusLabel(task: ReviewTask): string {
-  return reviewStatusMeta[task.status].label
+  return reviewDisplayStatusMeta[task.display_status].label
 }
 
 function statusType(task: ReviewTask) {
-  return reviewStatusMeta[task.status].type
+  return reviewDisplayStatusMeta[task.display_status].type
 }
 
 async function loadData() {
-  loading.value = true
   try {
-    const [taskRows, emailRows] = await Promise.all([reviewApi.list(), emailApi.list()])
-    tasks.value = taskRows.sort((a, b) => b.created_at.localeCompare(a.created_at))
-    emails.value = emailRows
+    const [taskPage] = await Promise.all([
+      reviewStore.loadPage({ offset: 0, limit: 100 }),
+      mailStore.loadPage({ offset: 0, limit: 50 }),
+    ])
 
     const taskId = String(route.params.taskId ?? '')
     if (taskId) {
-      const task = taskRows.find((item) => item.id === taskId) ?? (await reviewApi.detail(taskId))
+      const task = taskPage.items.find((item) => item.id === taskId) ?? (await reviewStore.detail(taskId))
       openTask(task, false)
     }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    loading.value = false
   }
 }
 
 function openTask(task: ReviewTask, updateRoute = true) {
   selected.value = task
-  payloadText.value = JSON.stringify(task.reviewed_payload ?? task.proposed_payload, null, 2)
   const effectivePayload = task.reviewed_payload ?? task.proposed_payload
   replyBody.value = String(
     effectivePayload.body ??
@@ -141,22 +143,8 @@ function closeDrawer() {
   if (route.params.taskId) void router.replace('/reviews')
 }
 
-function parsePayload(): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(payloadText.value)
-    if (!value || Array.isArray(value) || typeof value !== 'object') {
-      ElMessage.warning('确认内容必须是 JSON 对象')
-      return null
-    }
-    return value as Record<string, unknown>
-  } catch {
-    ElMessage.warning('确认内容不是有效的 JSON')
-    return null
-  }
-}
-
 async function approve() {
-  if (!selected.value || selected.value.status !== 'PENDING') return
+  if (deciding.value || !selected.value || selected.value.decision_status !== 'PENDING') return
   let payload: Record<string, unknown> | null
   if (selected.value.action_type === 'SEND_REPLY') {
     if (!replyBody.value.trim()) {
@@ -165,14 +153,13 @@ async function approve() {
     }
     payload = { body: replyBody.value.trim() }
   } else {
-    payload = parsePayload()
-    if (!payload) return
+    payload = null
     if (selected.value.action_type === 'LINK_APPLICATION') {
       if (!selectedApplicationId.value) {
         ElMessage.warning('请选择要关联的求职申请')
         return
       }
-      payload.application_id = selectedApplicationId.value
+      payload = { application_id: selectedApplicationId.value }
     }
   }
 
@@ -217,15 +204,14 @@ async function approve() {
 }
 
 async function approveWithFollowUp() {
-  if (!selected.value || selected.value.status !== 'PENDING') return
-  const payload = parsePayload()
-  if (!payload) return
+  if (deciding.value || !selected.value || selected.value.decision_status !== 'PENDING') return
+  let payload: Record<string, unknown> | null = null
   if (selected.value.action_type === 'LINK_APPLICATION') {
     if (!selectedApplicationId.value) {
       ElMessage.warning('请选择要关联的求职申请')
       return
     }
-    payload.application_id = selectedApplicationId.value
+    payload = { application_id: selectedApplicationId.value }
   }
 
   try {
@@ -246,7 +232,7 @@ async function approveWithFollowUp() {
 }
 
 async function reject() {
-  if (!selected.value || selected.value.status !== 'PENDING') return
+  if (deciding.value || !selected.value || selected.value.decision_status !== 'PENDING') return
   if (!decisionReason.value.trim()) {
     ElMessage.warning('请填写拒绝原因，便于后续追踪')
     return
@@ -259,10 +245,10 @@ async function decide(
   payload: Record<string, unknown> | null,
   autoApprove = false,
 ) {
-  if (!selected.value) return
+  if (deciding.value || !selected.value) return
   deciding.value = true
   try {
-    const response = await reviewApi.decide(selected.value.id, {
+    const response = await reviewStore.decide(selected.value.id, {
       version: selected.value.version,
       approve: approveDecision,
       reviewed_payload: payload,
@@ -300,14 +286,11 @@ async function decide(
       }
       // 先切换到 follow_up 任务再刷新，避免 loadData 根据旧路由打开原任务
       openTask(response.follow_up_review_task)
-      await loadData()
-      window.dispatchEvent(new Event('job-mail:data-poll'))
     } else {
       drawerVisible.value = false
       await router.replace('/reviews')
-      await loadData()
-      window.dispatchEvent(new Event('job-mail:data-poll'))
     }
+    await pollingStore.refreshNow()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -316,7 +299,7 @@ async function decide(
 }
 
 async function batchApprove() {
-  const pendingTasks = tasks.value.filter((task) => task.status === 'PENDING')
+  const pendingTasks = tasks.value.filter((task) => task.decision_status === 'PENDING')
   if (pendingTasks.length === 0) {
     ElMessage.info('没有待审核的任务')
     return
@@ -362,7 +345,7 @@ async function batchApprove() {
       ARCHIVE_EMAIL: {},
       RESTORE_EMAIL: {},
     }
-    const response = await reviewApi.decide(firstTask.id, {
+    const response = await reviewStore.decide(firstTask.id, {
       version: firstTask.version,
       approve: true,
       reviewed_payload: payload[firstTask.action_type] || null,
@@ -387,10 +370,8 @@ async function batchApprove() {
         ElMessage.info('工作流已进入回复确认环节，请检查回复内容')
       }
       openTask(response.follow_up_review_task)
-      await loadData()
-    } else {
-      await loadData()
     }
+    await pollingStore.refreshNow()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -454,6 +435,24 @@ function fieldLabel(key: string): string {
     result: '面试结果',
   }
   return labels[key] ?? '其他信息'
+}
+
+function taskUpdateChanges(task: ReviewTask): Array<[string, unknown, unknown]> {
+  if (task.action_type !== 'UPDATE_TASK') return []
+  const before = task.proposed_payload.before
+  if (!before || typeof before !== 'object' || Array.isArray(before)) return []
+  const previous = before as Record<string, unknown>
+  return [
+    'title',
+    'description',
+    'start_at',
+    'deadline_at',
+    'source_timezone',
+    'location',
+    'meeting_url',
+  ]
+    .filter((key) => Object.prototype.hasOwnProperty.call(task.proposed_payload, key))
+    .map((key) => [key, previous[key], task.proposed_payload[key]])
 }
 
 function displayValue(value: unknown, key = ''): string {
@@ -522,7 +521,7 @@ onMounted(loadData)
             @click="filter = 'pending'"
           >
             待审核
-            <span>{{ tasks.filter((task) => task.status === 'PENDING').length }}</span>
+            <span>{{ tasks.filter((task) => task.decision_status === 'PENDING').length }}</span>
           </button>
           <button
             type="button"
@@ -542,7 +541,7 @@ onMounted(loadData)
           placeholder="搜索审核任务"
         />
         <ElTooltip
-          v-if="tasks.filter((t) => t.status === 'PENDING').length > 0"
+          v-if="tasks.filter((t) => t.decision_status === 'PENDING').length > 0"
           content="批准第一项后自动执行后续操作（不含邮件发送）"
           placement="bottom"
         >
@@ -652,9 +651,24 @@ onMounted(loadData)
         <section class="review-section">
           <h3>建议内容</h3>
           <div
+            v-if="selected.action_type === 'UPDATE_TASK'"
+            class="task-change-list"
+          >
+            <div
+              v-for="[key, before, after] in taskUpdateChanges(selected)"
+              :key="key"
+              class="task-change-row"
+            >
+              <span class="task-change-label">{{ fieldLabel(key) }}</span>
+              <span>{{ displayValue(before, key) }}</span>
+              <span class="task-change-arrow">→</span>
+              <span>{{ displayValue(after, key) }}</span>
+            </div>
+          </div>
+          <div
             v-if="
               selected.action_type === 'LINK_APPLICATION' &&
-              selected.status === 'PENDING'
+              selected.decision_status === 'PENDING'
             "
             class="application-selector"
           >
@@ -683,7 +697,7 @@ onMounted(loadData)
                 <ElInput
                   v-if="
                     selected.action_type === 'SEND_REPLY' &&
-                    selected.status === 'PENDING' &&
+                    selected.decision_status === 'PENDING' &&
                     ['body', 'generated_body', 'reviewed_body'].includes(key)
                   "
                   v-model="replyBody"
@@ -699,30 +713,15 @@ onMounted(loadData)
           </dl>
         </section>
 
-        <section v-if="selected.status === 'PENDING'" class="review-section">
+        <section v-if="selected.decision_status === 'PENDING'" class="review-section">
           <h3>确认内容</h3>
           <p class="section-hint">
             {{
               selected.action_type === 'SEND_REPLY'
                 ? '如需调整回复，可直接在上方正文框中编辑；主题和收件人保持只读。'
-                : '需要调整建议时，可展开高级编辑并修改结构化内容。'
+                : '请核对上方业务信息；系统内部标识和协议字段保持只读。'
             }}
           </p>
-          <ElCollapse
-            v-if="selected.action_type !== 'SEND_REPLY'"
-            class="advanced-editor"
-          >
-            <ElCollapseItem title="高级编辑结构化内容" name="payload">
-              <p class="section-hint">字段属于系统接口约定，修改后必须保持有效格式。</p>
-              <ElInput
-                v-model="payloadText"
-                type="textarea"
-                :rows="12"
-                resize="vertical"
-                class="payload-editor"
-              />
-            </ElCollapseItem>
-          </ElCollapse>
           <label class="reason-label" for="decision-reason">审核说明</label>
           <ElInput
             id="decision-reason"
@@ -738,7 +737,7 @@ onMounted(loadData)
           <dl class="result-list">
             <div>
               <dt>状态</dt>
-              <dd>{{ reviewStatusMeta[selected.status].label }}</dd>
+              <dd>{{ reviewDisplayStatusMeta[selected.display_status].label }}</dd>
             </div>
             <div>
               <dt>处理时间</dt>
@@ -752,20 +751,14 @@ onMounted(loadData)
         </section>
       </div>
 
-      <template v-if="selected?.status === 'PENDING'" #footer>
-        <div class="drawer-actions">
-          <ElButton :disabled="deciding" @click="reject">拒绝</ElButton>
-          <ElButton
-            v-if="selected.action_type !== 'SEND_REPLY' && selected.action_type !== 'ARCHIVE_EMAIL' && selected.action_type !== 'RESTORE_EMAIL'"
-            :disabled="deciding"
-            @click="approveWithFollowUp"
-          >
-            批准并自动执行后续
-          </ElButton>
-          <ElButton type="primary" :loading="deciding" @click="approve">
-            {{ selected.action_type === 'SEND_REPLY' ? '确认并发送' : '批准' }}
-          </ElButton>
-        </div>
+      <template v-if="selected?.decision_status === 'PENDING'" #footer>
+        <ReviewDecisionActions
+          :action-type="selected.action_type"
+          :deciding="deciding"
+          @reject="reject"
+          @approve-follow-up="approveWithFollowUp"
+          @approve="approve"
+        />
       </template>
     </ElDrawer>
   </div>
@@ -953,6 +946,37 @@ onMounted(loadData)
   border: 1px solid var(--jm-border-light);
   border-radius: 7px;
   overflow: hidden;
+}
+
+.task-change-list {
+  margin-bottom: 12px;
+  border: 1px solid var(--jm-border-light);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.task-change-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--jm-border-light);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.task-change-row:last-child {
+  border-bottom: 0;
+}
+
+.task-change-label,
+.task-change-arrow {
+  color: var(--jm-text-secondary);
+}
+
+.task-change-arrow {
+  text-align: center;
 }
 
 .application-selector {

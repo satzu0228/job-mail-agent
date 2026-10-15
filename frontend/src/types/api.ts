@@ -21,16 +21,14 @@ export type EmailCategory =
   | 'JOB_RELATED_OTHER'
   | 'NON_JOB'
 export type EmailPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'
-export type ReviewTaskStatus =
-  | 'PENDING'
-  | 'APPROVED'
-  | 'REJECTED'
-  | 'CANCELLED'
-  | 'EXPIRED'
-  | 'EXECUTING'
-  | 'SUCCEEDED'
-  | 'FAILED'
-  | 'UNKNOWN'
+export type ReviewDecisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED'
+export type ReviewExecutionStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
+export type ReviewDisplayStatus =
+  | ReviewDecisionStatus
+  | 'APPROVED_EXECUTING'
+  | 'APPROVED_SUCCEEDED'
+  | 'APPROVED_FAILED'
+  | 'APPROVED_UNKNOWN'
 export type ReviewActionType =
   | 'CREATE_APPLICATION'
   | 'LINK_APPLICATION'
@@ -105,6 +103,8 @@ export interface EmailSyncResult {
   skipped: number
   failed: number
   created_email_ids: number[]
+  workflow_run_ids: string[]
+  failed_workflows: Record<number, string>
 }
 
 export interface EmailListItem {
@@ -178,6 +178,15 @@ export interface JobApplication {
   version: number
   created_at: string
   updated_at: string
+  allowed_transitions: ApplicationStage[]
+  allowed_actions: Array<
+    | 'UPDATE_DETAILS'
+    | 'TRANSITION_STAGE'
+    | 'RECORD_INTERVIEW_RESULT'
+    | 'SCHEDULE_NEXT_INTERVIEW'
+    | 'RECORD_OFFER_RESULT'
+    | 'REOPEN_APPLICATION'
+  >
 }
 
 export interface JobApplicationCreate {
@@ -263,6 +272,7 @@ export interface Task {
   source_email_id: number | null
   task_type: TaskType
   interview_round: number | null
+  interview_round_id: number | null
   title: string
   description: string | null
   raw_time_text: string | null
@@ -347,7 +357,8 @@ export interface Reminder {
 export interface ReviewTask {
   id: string
   user_id: number
-  workflow_run_id: string
+  workflow_run_id: string | null
+  parent_review_task_id: string | null
   source_email_id: number | null
   application_id: number | null
   draft_id: number | null
@@ -355,7 +366,9 @@ export interface ReviewTask {
   risk_level: RiskLevel
   proposed_payload: Record<string, unknown>
   reviewed_payload: Record<string, unknown> | null
-  status: ReviewTaskStatus
+  decision_status: ReviewDecisionStatus
+  execution_status: ReviewExecutionStatus | null
+  display_status: ReviewDisplayStatus
   decision_source: 'USER' | 'RULE' | null
   decision_reason: string | null
   reviewed_at: string | null
@@ -381,6 +394,7 @@ export interface InterviewRound {
   id: number
   application_id: number
   round_number: number
+  status: 'PLANNED' | 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW'
   result: InterviewResult
   interview_date: string | null
   location: string | null

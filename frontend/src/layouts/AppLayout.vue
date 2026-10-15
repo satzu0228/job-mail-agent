@@ -12,17 +12,22 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 
-import { reminderApi, reviewApi } from '@/api'
+import { reminderApi } from '@/api'
 import { useNotifications } from '@/composables/useNotifications'
+import { usePollingStore } from '@/stores/polling'
+import { useReviewStore } from '@/stores/reviews'
 
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
-const pendingCount = ref(0)
 const reminderCount = ref(0)
-let pollTimer: number | undefined
 let isFirstPoll = true
+let unsubscribePolling: (() => void) | undefined
+const reviewStore = useReviewStore()
+const pollingStore = usePollingStore()
+const { pendingCount } = storeToRefs(reviewStore)
 
 const {
   isSupported: notificationSupported,
@@ -63,11 +68,10 @@ const pageTitle = computed(() => String(route.meta.title ?? '求职邮迹'))
 async function loadPendingCount() {
   try {
     const [tasks, reminders] = await Promise.all([
-      reviewApi.list(),
+      reviewStore.loadPending(),
       reminderApi.list(true),
     ])
-    const pendingReviews = tasks.filter((task) => task.status === 'PENDING')
-    pendingCount.value = pendingReviews.length
+    const pendingReviews = tasks.items
     reminderCount.value = reminders.length
 
     // 首次加载不触发通知，仅后续轮询检测增量。
@@ -87,10 +91,7 @@ async function loadPendingCount() {
     for (const r of reminders) seenReminderIds.value.add(r.id)
     for (const t of pendingReviews) seenReviewTaskIds.value.add(t.id)
   } catch {
-    pendingCount.value = 0
     reminderCount.value = 0
-  } finally {
-    window.dispatchEvent(new Event('job-mail:data-poll'))
   }
 }
 
@@ -100,22 +101,16 @@ function navigate(path: string) {
 
 watch(
   () => route.fullPath,
-  () => void loadPendingCount(),
+  () => void pollingStore.refreshNow(),
 )
-
-function handleRefreshBadge() {
-  void loadPendingCount()
-}
 
 onMounted(() => {
   void loadPendingCount()
-  pollTimer = window.setInterval(loadPendingCount, 5_000)
-  window.addEventListener('job-mail:refresh-badge', handleRefreshBadge)
+  unsubscribePolling = pollingStore.subscribe('navigation-badges', loadPendingCount)
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer) window.clearInterval(pollTimer)
-  window.removeEventListener('job-mail:refresh-badge', handleRefreshBadge)
+  unsubscribePolling?.()
 })
 </script>
 

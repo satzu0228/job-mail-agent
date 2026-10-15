@@ -2,9 +2,14 @@
 import { Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 
-import { applicationApi, emailApi, taskApi } from '@/api'
-import { getApiErrorMessage } from '@/api/http'
+import { applicationApi } from '@/api'
+import { getApiErrorMessage, isVersionConflict } from '@/api/http'
+import ApplicationActionBar from '@/components/applications/ApplicationActionBar.vue'
+import { useApplicationStore } from '@/stores/applications'
+import { useMailStore } from '@/stores/mail'
+import { useTaskStore } from '@/stores/tasks'
 import {
   eventTypeLabels,
   roundResultMeta,
@@ -33,11 +38,13 @@ import type {
 
 type ProgressFilter = 'all' | 'active' | 'closed'
 
-const applications = ref<JobApplication[]>([])
-const tasks = ref<Task[]>([])
-const emails = ref<EmailListItem[]>([])
+const applicationStore = useApplicationStore()
+const taskStore = useTaskStore()
+const mailStore = useMailStore()
+const { applications, loading } = storeToRefs(applicationStore)
+const { tasks } = storeToRefs(taskStore)
+const { emails } = storeToRefs(mailStore)
 const interviewRounds = ref<InterviewRound[]>([])
-const loading = ref(false)
 const keyword = ref('')
 const progressFilter = ref<ProgressFilter>('all')
 const stageFilter = ref('')
@@ -128,17 +135,8 @@ const interviewResultOptions: Array<{
   { value: 'PENDING', label: '待确认', description: '尚未收到明确结果，继续等待通知' },
 ]
 
-const allowedStageTransitions: Record<ApplicationStage, ApplicationStage[]> = {
-  APPLIED: ['ASSESSMENT', 'INTERVIEW', 'OFFER', 'REJECTED', 'WITHDRAWN'],
-  ASSESSMENT: ['INTERVIEW', 'OFFER', 'REJECTED', 'WITHDRAWN'],
-  INTERVIEW: ['OFFER', 'REJECTED', 'WITHDRAWN'],
-  OFFER: ['WITHDRAWN'],
-  REJECTED: [],
-  WITHDRAWN: [],
-}
-
 const availableStages = computed(() =>
-  selected.value ? allowedStageTransitions[selected.value.current_stage] : [],
+  selected.value?.allowed_transitions ?? [],
 )
 
 const rules: FormRules = {
@@ -183,6 +181,15 @@ function relatedTasks(id: number): Task[] {
 
 function stageLabel(stage: JobApplication['current_stage']): string {
   return stageMeta[stage].label
+}
+
+async function handleApplicationCommandError(error: unknown) {
+  if (isVersionConflict(error) && selected.value) {
+    selected.value = await applicationStore.refresh(selected.value.id)
+    ElMessage.warning('申请状态已被更新，请确认最新内容后重新提交')
+    return
+  }
+  ElMessage.error(getApiErrorMessage(error))
 }
 
 function stageType(stage: JobApplication['current_stage']) {
@@ -287,20 +294,14 @@ function nextTask(applicationId: number): Task | undefined {
 }
 
 async function loadData() {
-  loading.value = true
   try {
-    const [applicationRows, taskRows, emailRows] = await Promise.all([
-      applicationApi.list(),
-      taskApi.list(),
-      emailApi.list(),
+    await Promise.all([
+      applicationStore.loadPage({ offset: 0, limit: 50 }),
+      taskStore.refreshRange({ offset: 0, limit: 100 }),
+      mailStore.loadPage({ offset: 0, limit: 50 }),
     ])
-    applications.value = applicationRows
-    tasks.value = taskRows
-    emails.value = emailRows
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    loading.value = false
   }
 }
 
@@ -318,12 +319,9 @@ async function openApplication(application: JobApplication) {
   drawerVisible.value = true
   loadingEvents.value = true
   try {
-    const [events, rounds] = await Promise.all([
-      applicationApi.events(application.id),
-      applicationApi.listInterviewRounds(application.id),
-    ])
-    applicationEvents.value = events.items
-    interviewRounds.value = rounds
+    const details = await applicationStore.loadDetails(application.id)
+    applicationEvents.value = details.events
+    interviewRounds.value = details.rounds
   } catch (error) {
     applicationEvents.value = []
     interviewRounds.value = []
@@ -347,12 +345,11 @@ async function saveApplication() {
       contact_email: editForm.contact_email || null,
       notes: editForm.notes || null,
     })
-    const index = applications.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) applications.value[index] = updated
+    applicationStore.upsert(updated)
     selected.value = updated
     ElMessage.success('申请信息已保存')
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     saving.value = false
   }
@@ -394,14 +391,13 @@ async function transitionStage() {
       proposed_stage: stageForm.proposed_stage,
       reason: stageForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) applications.value[index] = updated
+    applicationStore.upsert(updated)
     selected.value = updated
     applicationEvents.value = (await applicationApi.events(updated.id)).items
     stageVisible.value = false
     ElMessage.success('申请阶段已更新')
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     transitioningStage.value = false
   }
@@ -427,8 +423,7 @@ async function updateInterviewResult() {
       result: resultForm.result,
       reason: resultForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) applications.value[index] = updated
+    applicationStore.upsert(updated)
     selected.value = updated
     if (updated.interview_result === 'PASSED') drawerVisible.value = true
     if (drawerVisible.value) {
@@ -437,7 +432,7 @@ async function updateInterviewResult() {
     resultVisible.value = false
     ElMessage.success(`面试结果已更新为“${interviewResultLabel(updated.interview_result)}”`)
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     savingResult.value = false
   }
@@ -480,8 +475,7 @@ async function updateRoundResult() {
       result: roundResultForm.result,
       reason: roundResultForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === response.application.id)
-    if (index >= 0) applications.value[index] = response.application
+    applicationStore.upsert(response.application)
     selected.value = response.application
     // 刷新轮次和事件
     const [rounds, events] = await Promise.all([
@@ -493,7 +487,7 @@ async function updateRoundResult() {
     roundResultVisible.value = false
     ElMessage.success(`${roundResultForm.roundLabel}结果已更新为"${interviewResultLabel(response.round.result)}"`)
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     savingRoundResult.value = false
   }
@@ -530,15 +524,14 @@ async function scheduleNextInterview() {
       meeting_url: nextInterviewForm.meeting_url.trim() || null,
       reason: nextInterviewForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === response.application.id)
-    if (index >= 0) applications.value[index] = response.application
+    applicationStore.upsert(response.application)
     selected.value = response.application
-    tasks.value.push(response.task)
+    taskStore.upsert(response.task)
     applicationEvents.value = (await applicationApi.events(response.application.id)).items
     nextInterviewVisible.value = false
     ElMessage.success(`${interviewRoundLabel(response.task.interview_round)}已登记`)
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     schedulingNextInterview.value = false
   }
@@ -564,8 +557,7 @@ async function updateOfferResult() {
       result: offerForm.result,
       reason: offerForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) applications.value[index] = updated
+    applicationStore.upsert(updated)
     selected.value = updated
     if (drawerVisible.value) {
       applicationEvents.value = (await applicationApi.events(updated.id)).items
@@ -573,7 +565,7 @@ async function updateOfferResult() {
     offerVisible.value = false
     ElMessage.success(`Offer 结果已更新为“${offerResultLabel(updated.offer_result)}”`)
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     savingOffer.value = false
   }
@@ -604,14 +596,13 @@ async function reopenApplication() {
       target_stage: reopenForm.target_stage,
       reason: reopenForm.reason.trim(),
     })
-    const index = applications.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) applications.value[index] = updated
+    applicationStore.upsert(updated)
     selected.value = updated
     applicationEvents.value = (await applicationApi.events(updated.id)).items
     reopenVisible.value = false
     ElMessage.success('申请已重新打开')
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    await handleApplicationCommandError(error)
   } finally {
     reopening.value = false
   }
@@ -822,22 +813,11 @@ onMounted(loadData)
           <p v-if="interviewTask(selected.id)">
             {{ formatDateTime(taskTime(interviewTask(selected.id)!)) }}
           </p>
-          <ElButton
-            v-if="selected.status === 'ACTIVE' && selected.current_stage !== 'INTERVIEW' && availableStages.length"
-            type="primary"
-            plain
-            @click="openStageTransition"
-          >
-            更新阶段
-          </ElButton>
-          <ElButton
-            v-if="selected.status !== 'ACTIVE'"
-            type="primary"
-            plain
-            @click="openReopenApplication"
-          >
-            重新打开
-          </ElButton>
+          <ApplicationActionBar
+            :application="selected"
+            @transition="openStageTransition"
+            @reopen="openReopenApplication"
+          />
         </div>
 
         <div

@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router'
 
 import { dashboardApi, taskApi } from '@/api'
 import { getApiErrorMessage } from '@/api/http'
+import { usePollingStore } from '@/stores/polling'
 import {
   reviewActionMeta,
   riskMeta,
@@ -28,6 +29,8 @@ const URGENCY = {
 } as const
 
 const router = useRouter()
+const pollingStore = usePollingStore()
+let unsubscribePolling: (() => void) | undefined
 
 const data = ref<DashboardData | null>(null)
 const loading = ref(true)
@@ -158,17 +161,13 @@ function applicationForReview(review: ReviewTask): string {
 // Lifecycle
 // ------------------------------------------------------------------
 
-function onDataPoll() {
-  void load()
-}
-
 onMounted(() => {
   void load()
-  window.addEventListener('job-mail:data-poll', onDataPoll)
+  unsubscribePolling = pollingStore.subscribe('dashboard', load)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('job-mail:data-poll', onDataPoll)
+  unsubscribePolling?.()
 })
 </script>
 

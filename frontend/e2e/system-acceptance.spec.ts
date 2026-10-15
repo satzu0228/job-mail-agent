@@ -67,9 +67,9 @@ test('E2E-04 手动同步两次只新增一次并给出明确反馈', async ({ p
   await page.goto('/mail')
   const syncButton = page.getByTitle('同步收件箱')
   await syncButton.click()
-  await expect(page.getByText('同步完成，新增 1 封邮件')).toBeVisible()
+  await expect(page.getByText('同步和智能处理完成，共处理 1/1 封新邮件')).toBeVisible()
   await syncButton.click()
-  await expect(page.getByText('同步完成，新增 0 封邮件')).toBeVisible()
+  await expect(page.getByText('同步完成，没有新邮件')).toBeVisible()
 })
 
 test('E2E-04A 后台同步完成后邮件页随轻量轮询刷新', async ({ page }) => {
@@ -79,9 +79,9 @@ test('E2E-04A 后台同步完成后邮件页随轻量轮询刷新', async ({ pag
   await expect(page.getByText('没有符合条件的收件')).toBeVisible()
 
   state.emails.push(delayedEmails[0])
-  await page.evaluate(() => window.dispatchEvent(new Event('job-mail:data-poll')))
-
-  await expect(page.getByText('星河科技后端开发工程师一面邀请').first()).toBeVisible()
+  await expect(page.getByText('星河科技后端开发工程师一面邀请').first()).toBeVisible({
+    timeout: 8_000,
+  })
 })
 
 test('E2E-05 面试邀请可从分析进入人工审核', async ({ page }) => {
@@ -100,16 +100,16 @@ test('E2E-05 面试邀请可从分析进入人工审核', async ({ page }) => {
 test('E2E-06 批准、修改、拒绝与重复点击保护可理解', async ({ page }) => {
   const state = await installMockApi(page)
   await page.goto('/reviews/review-create-task')
-  await page.getByText('高级编辑结构化内容').click()
-  const editor = page.locator('.payload-editor textarea')
-  await expect(editor).toHaveValue(/星河科技一面/)
+  await expect(page.getByText('系统内部标识和协议字段保持只读')).toBeVisible()
   await page.getByRole('button', { name: '批准', exact: true }).dblclick()
   await expect(page.getByText('审核已批准')).toBeVisible()
   expect(state.decisions).toBe(1)
   await expect(page).toHaveURL(/\/reviews\/review-send-reply$/)
   await expect(page.getByText('发送回复', { exact: true }).first()).toBeVisible()
 
-  state.reviews[0].status = 'PENDING'
+  state.reviews[0].decision_status = 'PENDING'
+  state.reviews[0].execution_status = null
+  state.reviews[0].display_status = 'PENDING'
   state.decisions = 0
   await page.goto('/reviews/review-create-task')
   await page.getByPlaceholder('拒绝时请填写原因；批准时可选').fill('时间需要进一步确认')
